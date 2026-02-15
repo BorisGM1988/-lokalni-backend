@@ -58,3 +58,31 @@ app.post('/register', async (req, res) => {
 app.listen(process.env.PORT || 3000, () => {
   console.log('Server radi');
 });
+// Primer rute za registraciju (prilagodi po potrebi)
+app.post('/register', async (req, res) => {
+  const { email, password, ime, telefon, lokacija } = req.body;
+
+  // Proveri da li su obavezna polja tu
+  if (!email || !password) {
+    return res.status(400).json({ error: 'Email i lozinka su obavezni' });
+  }
+
+  // Hash lozinke (ako koristiš bcrypt)
+  const hashedPassword = await bcrypt.hash(password, 10);
+
+  // Sačuvaj u SQLite (prilagodi ako imaš drugačiju logiku)
+  db.run(
+    `INSERT INTO users (email, password, ime, telefon, lokacija) VALUES (?, ?, ?, ?, ?)`,
+    [email, hashedPassword, ime || '', telefon || '', lokacija || ''],
+    function (err) {
+      if (err) {
+        console.error(err);
+        return res.status(400).json({ error: 'Email već postoji ili greška pri čuvanju' });
+      }
+      res.status(201).json({ 
+        message: 'Korisnik uspešno registrovan!',
+        userId: this.lastID 
+      });
+    }
+  );
+});

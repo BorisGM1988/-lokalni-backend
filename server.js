@@ -54,10 +54,6 @@ app.post('/register', async (req, res) => {
     }
   );
 });
-
-app.listen(process.env.PORT || 3000, () => {
-  console.log('Server radi');
-});
 // Primer rute za registraciju (prilagodi po potrebi)
 app.post('/register', async (req, res) => {
   const { email, password, ime, telefon, lokacija } = req.body;
@@ -85,4 +81,8 @@ app.post('/register', async (req, res) => {
       });
     }
   );
+});
+
+app.listen(process.env.PORT || 3000, () => {
+  console.log('Server radi');
 });

@@ -95,7 +95,44 @@ app.post('/register', async (req, res) => {
 });
 
 const port = process.env.PORT || 3000;
+app.post('/login', async (req, res) => {
+  const { email, lozinka } = req.body;
 
+  if (!email || !lozinka) {
+    return res.status(400).json({ error: 'Email i lozinka su obavezni' });
+  }
+
+  db.get(`SELECT * FROM users WHERE email = ?`, [email], async (err, user) => {
+    if (err || !user) {
+      return res.status(401).json({ error: 'Pogrešan email ili lozinka' });
+    }
+
+    const isMatch = await bcrypt.compare(lozinka, user.password);
+    if (!isMatch) {
+      return res.status(401).json({ error: 'Pogrešan email ili lozinka' });
+    }
+
+    const token = jwt.sign(
+      { userId: user.id, email: user.email },
+      JWT_SECRET,
+      { expiresIn: '30d' }
+    );
+
+    res.json({
+      message: 'Prijava uspešna',
+      token,
+      user: {
+        id: user.id,
+        ime: user.ime,
+        email: user.email,
+        telefon: user.telefon,
+        lokacija: user.lokacija,
+        opis: user.opis,
+        nise: user.nise ? JSON.parse(user.nise) : []
+      }
+    });
+  });
+});
 app.listen(port, () => {
   console.log(`Server startovan na portu ${port}`);
 });

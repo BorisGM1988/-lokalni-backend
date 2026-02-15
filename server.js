@@ -133,6 +133,101 @@ app.post('/login', async (req, res) => {
     });
   });
 });
+// Ruta za update profila (izmeni)
+app.put('/update-profile', async (req, res) => {
+  const { ime, telefon, lokacija, opis, nise, slikaUrl } = req.body; // slikaUrl ako imaš upload
+  const token = req.headers.authorization?.split(' ')[1];
+
+  if (!token) {
+    return res.status(401).json({ error: 'Nema tokena' });
+  }
+
+  let decoded;
+  try {
+    decoded = jwt.verify(token, JWT_SECRET);
+  } catch {
+    return res.status(401).json({ error: 'Invalidan token' });
+  }
+
+  db.run(
+    `UPDATE users SET ime = ?, telefon = ?, lokacija = ?, opis = ?, nise = ? WHERE id = ?`,
+    [ime, telefon, lokacija, opis, JSON.stringify(nise), decoded.userId],
+    (err) => {
+      if (err) {
+        console.error('Greška pri update-u:', err.message);
+        return res.status(500).json({ error: 'Greška na serveru' });
+      }
+      res.json({ message: 'Profil ažuriran' });
+    }
+  );
+});
+
+// Ruta za dodaj proizvod (npr. tabela 'proizvodi' ako imaš)
+db.run(`
+  CREATE TABLE IF NOT EXISTS proizvodi (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    userId INTEGER,
+    naziv TEXT,
+    opis TEXT,
+    cena NUMBER,
+    slikaUrl TEXT,
+    created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+  )
+`);
+
+app.post('/add-proizvod', async (req, res) => {
+  const { naziv, opis, cena, slikaUrl } = req.body;
+  const token = req.headers.authorization?.split(' ')[1];
+
+  if (!token) {
+    return res.status(401).json({ error: 'Nema tokena' });
+  }
+
+  let decoded;
+  try {
+    decoded = jwt.verify(token, JWT_SECRET);
+  } catch {
+    return res.status(401).json({ error: 'Invalidan token' });
+  }
+
+  db.run(
+    `INSERT INTO proizvodi (userId, naziv, opis, cena, slikaUrl) VALUES (?, ?, ?, ?, ?)`,
+    [decoded.userId, naziv, opis, cena, slikaUrl || null],
+    function (err) {
+      if (err) {
+        console.error('Greška pri dodavanju proizvoda:', err.message);
+        return res.status(500).json({ error: 'Greška na serveru' });
+      }
+      res.json({ message: 'Proizvod uspešno dodan', proizvodId: this.lastID });
+    }
+  );
+});
+
+// Ruta za get profil (ako hoćeš da učitaš najnovije podatke iz baze)
+app.get('/profile', async (req, res) => {
+  const token = req.headers.authorization?.split(' ')[1];
+
+  if (!token) {
+    return res.status(401).json({ error: 'Nema tokena' });
+  }
+
+  let decoded;
+  try {
+    decoded = jwt.verify(token, JWT_SECRET);
+  } catch {
+    return res.status(401).json({ error: 'Invalidan token' });
+  }
+
+  db.get(`SELECT * FROM users WHERE id = ?`, [decoded.userId], (err, user) => {
+    if (err || !user) {
+      return res.status(404).json({ error: 'Korisnik ne postoji' });
+    }
+
+    user.nise = user.nise ? JSON.parse(user.nise) : [];
+
+    res.json({ user });
+  });
+});
 app.listen(port, () => {
   console.log(`Server startovan na portu ${port}`);
 });

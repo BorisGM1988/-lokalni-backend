@@ -5,6 +5,7 @@ const jwt = require('jsonwebtoken');
 const cors = require('cors');
 
 const app = express();
+
 app.use(express.json());
 app.use(cors());
 
@@ -15,74 +16,84 @@ db.serialize(() => {
     CREATE TABLE IF NOT EXISTS users (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
       ime TEXT,
-      email TEXT UNIQUE,
-      password TEXT,
+      email TEXT UNIQUE NOT NULL,
+      password TEXT NOT NULL,
       telefon TEXT,
       lokacija TEXT,
-      nise TEXT,
+      nise TEXT,          -- JSON string za array
       opis TEXT,
       created_at DATETIME DEFAULT CURRENT_TIMESTAMP
     )
-  `);
+  `, (err) => {
+    if (err) console.error('Greška pri kreiranju tabele:', err.message);
+    else console.log('Tabela users spremna');
+  });
 });
 
-const JWT_SECRET = 'tvoj-tajni-kljuc-123456789'; // promeni u produkciji na duži random string
+const JWT_SECRET = 'tvoj-tajni-kljuc-123456789-promeni-ovo-u-produkciji'; // ← OBAVEZNO PROMENI OVO U NEKI DUŽI RANDOM STRING
 
 app.post('/register', async (req, res) => {
+  console.log('Primljen POST /register:', req.body); // vidi se u Render Logs
+
   const { ime, email, lozinka, telefon, lokacija, nise, opis } = req.body;
 
   if (!ime || !email || !lozinka || !telefon || !lokacija) {
-    return res.status(400).json({ error: 'Sva polja su obavezna' });
+    return res.status(400).json({ error: 'Sva obavezna polja moraju biti popunjena' });
   }
 
-  const hashedPassword = await bcrypt.hash(lozinka, 10);
+  if (lozinka.length < 6) {
+    return res.status(400).json({ error: 'Lozinka mora imati najmanje 6 karaktera' });
+  }
 
-  db.run(
-    'INSERT INTO users (ime, email, password, telefon, lokacija, nise, opis) VALUES (?, ?, ?, ?, ?, ?, ?)',
-    [ime, email, hashedPassword, telefon, lokacija, JSON.stringify(nise), opis],
-    function(err) {
-      if (err) {
-        if (err.message.includes('UNIQUE constraint failed')) {
-          return res.status(400).json({ error: 'Email već postoji' });
+  try {
+    const hashedPassword = await bcrypt.hash(lozinka, 10);
+
+    db.run(
+      `INSERT INTO users (ime, email, password, telefon, lokacija, nise, opis)
+       VALUES (?, ?, ?, ?, ?, ?, ?)`,
+      [
+        ime,
+        email,
+        hashedPassword,
+        telefon,
+        lokacija,
+        JSON.stringify(nise || []), // čuva array kao string
+        opis || null
+      ],
+      function (err) {
+        if (err) {
+          if (err.message.includes('UNIQUE constraint failed')) {
+            return res.status(409).json({ error: 'Email već postoji' });
+          }
+          console.error('Greška pri insertu:', err.message);
+          return res.status(500).json({ error: 'Greška na serveru' });
         }
-        return res.status(500).json({ error: 'Greška na serveru' });
+
+        const token = jwt.sign(
+          { userId: this.lastID, email },
+          JWT_SECRET,
+          { expiresIn: '30d' }
+        );
+
+        res.status(201).json({
+          message: 'Registracija uspešna',
+          token,
+          user: { id: this.lastID, ime, email }
+        });
       }
-
-      const token = jwt.sign({ userId: this.lastID, email }, JWT_SECRET, { expiresIn: '30d' });
-
-      res.json({ message: 'Registracija uspešna', token });
-    }
-  );
-});
-// Primer rute za registraciju (prilagodi po potrebi)
-app.post('/register', async (req, res) => {
-  const { email, password, ime, telefon, lokacija } = req.body;
-
-  // Proveri da li su obavezna polja tu
-  if (!email || !password) {
-    return res.status(400).json({ error: 'Email i lozinka su obavezni' });
+    );
+  } catch (err) {
+    console.error('Greška u registraciji:', err);
+    res.status(500).json({ error: 'Greška na serveru' });
   }
-
-  // Hash lozinke (ako koristiš bcrypt)
-  const hashedPassword = await bcrypt.hash(password, 10);
-
-  // Sačuvaj u SQLite (prilagodi ako imaš drugačiju logiku)
-  db.run(
-    `INSERT INTO users (email, password, ime, telefon, lokacija) VALUES (?, ?, ?, ?, ?)`,
-    [email, hashedPassword, ime || '', telefon || '', lokacija || ''],
-    function (err) {
-      if (err) {
-        console.error(err);
-        return res.status(400).json({ error: 'Email već postoji ili greška pri čuvanju' });
-      }
-      res.status(201).json({ 
-        message: 'Korisnik uspešno registrovan!',
-        userId: this.lastID 
-      });
-    }
-  );
 });
 
-app.listen(process.env.PORT || 3000, () => {
-  console.log('Server radi');
+// Dodaj test rutu da vidiš da server odgovara
+app.get('/test', (req, res) => {
+  res.send('Backend radi! Trenutno vreme: ' + new Date().toISOString());
+});
+
+const port = process.env.PORT || 3000;
+app.listen(port, () => {
+  console.log(`Server radi na portu ${port}`);
 });

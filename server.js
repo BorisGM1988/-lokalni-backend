@@ -20,20 +20,26 @@ db.serialize(() => {
       password TEXT NOT NULL,
       telefon TEXT,
       lokacija TEXT,
-      nise TEXT,          -- JSON string za array
+      nise TEXT,
       opis TEXT,
       created_at DATETIME DEFAULT CURRENT_TIMESTAMP
     )
   `, (err) => {
     if (err) console.error('Greška pri kreiranju tabele:', err.message);
-    else console.log('Tabela users spremna');
+    else console.log('Tabela users kreirana ili postoji');
   });
 });
 
-const JWT_SECRET = 'tvoj-tajni-kljuc-123456789-promeni-ovo-u-produkciji'; // ← OBAVEZNO PROMENI OVO U NEKI DUŽI RANDOM STRING
+const JWT_SECRET = 'promeni-ovo-u-dug-random-string-za-produkciju-2026'; // OBAVEZNO PROMENI OVO!
 
+// TEST RUTA – da vidiš da server živi
+app.get('/test', (req, res) => {
+  res.send('Backend radi! Trenutno vreme: ' + new Date().toISOString());
+});
+
+// JEDINA ruta za registraciju
 app.post('/register', async (req, res) => {
-  console.log('Primljen POST /register:', req.body); // vidi se u Render Logs
+  console.log('Primljen POST /register zahtev:', req.body); // vidi se u Render Logs-u!
 
   const { ime, email, lozinka, telefon, lokacija, nise, opis } = req.body;
 
@@ -57,15 +63,15 @@ app.post('/register', async (req, res) => {
         hashedPassword,
         telefon,
         lokacija,
-        JSON.stringify(nise || []), // čuva array kao string
+        JSON.stringify(nise || []), // array kao string
         opis || null
       ],
       function (err) {
         if (err) {
+          console.error('Greška pri insertu:', err.message);
           if (err.message.includes('UNIQUE constraint failed')) {
             return res.status(409).json({ error: 'Email već postoji' });
           }
-          console.error('Greška pri insertu:', err.message);
           return res.status(500).json({ error: 'Greška na serveru' });
         }
 
@@ -83,17 +89,12 @@ app.post('/register', async (req, res) => {
       }
     );
   } catch (err) {
-    console.error('Greška u registraciji:', err);
+    console.error('Greška u registraciji:', err.message);
     res.status(500).json({ error: 'Greška na serveru' });
   }
 });
 
-// Dodaj test rutu da vidiš da server odgovara
-app.get('/test', (req, res) => {
-  res.send('Backend radi! Trenutno vreme: ' + new Date().toISOString());
-});
-
 const port = process.env.PORT || 3000;
 app.listen(port, () => {
-  console.log(`Server radi na portu ${port}`);
+  console.log(`Server startovan na portu ${port}`);
 });

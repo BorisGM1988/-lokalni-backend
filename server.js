@@ -228,6 +228,15 @@ app.get('/profile', async (req, res) => {
     res.json({ user });
   });
 });
+app.get('/obrisi-sve-naloge', (req, res) => {
+  db.run('DELETE FROM users', (err) => {
+    if (err) {
+      console.error('Greška pri brisanju:', err.message);
+      return res.status(500).json({ error: 'Greška' });
+    }
+    res.json({ message: 'Svi nalozi obrisani – možeš da se registruješ ponovo' });
+  });
+});
 app.listen(port, () => {
   console.log(`Server startovan na portu ${port}`);
 });

@@ -133,33 +133,41 @@ app.post('/login', async (req, res) => {
     });
   });
 });
-// Ruta za update profila (izmeni)
-app.put('/update-profile', async (req, res) => {
-  const { ime, telefon, lokacija, opis, nise, slikaUrl } = req.body; // slikaUrl ako imaš upload
-  const token = req.headers.authorization?.split(' ')[1];
+app.get('/profile', (req, res) => {
+  const token = req.headers.authorization?.split(' ')[1]; // Bearer token
 
   if (!token) {
-    return res.status(401).json({ error: 'Nema tokena' });
+    return res.status(401).json({ error: 'Niste ulogovani' });
   }
 
-  let decoded;
   try {
-    decoded = jwt.verify(token, JWT_SECRET);
-  } catch {
-    return res.status(401).json({ error: 'Invalidan token' });
-  }
+    const decoded = jwt.verify(token, JWT_SECRET);
+    const userId = decoded.userId;
 
-  db.run(
-    `UPDATE users SET ime = ?, telefon = ?, lokacija = ?, opis = ?, nise = ? WHERE id = ?`,
-    [ime, telefon, lokacija, opis, JSON.stringify(nise), decoded.userId],
-    (err) => {
+    db.get('SELECT * FROM users WHERE id = ?', [userId], (err, user) => {
       if (err) {
-        console.error('Greška pri update-u:', err.message);
+        console.error('Greška u bazi:', err);
         return res.status(500).json({ error: 'Greška na serveru' });
       }
-      res.json({ message: 'Profil ažuriran' });
-    }
-  );
+
+      if (!user) {
+        return res.status(404).json({ error: 'Korisnik nije pronađen' });
+      }
+
+      res.json({
+        ime: user.ime,
+        email: user.email,
+        telefon: user.telefon,
+        lokacija: user.lokacija,
+        nise: JSON.parse(user.nise || '[]'),
+        opis: user.opis || '',
+        registeredAt: user.created_at
+      });
+    });
+  } catch (err) {
+    console.error('Greška pri verifikaciji tokena:', err);
+    res.status(401).json({ error: 'Nevažeći token' });
+  }
 });
 
 // Ruta za dodaj proizvod (npr. tabela 'proizvodi' ako imaš)

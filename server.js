@@ -169,7 +169,39 @@ app.get('/profile', (req, res) => {
     res.status(401).json({ error: 'Nevažeći token' });
   }
 });
+app.post('/login', (req, res) => {
+  const { email, lozinka } = req.body;
 
+  if (!email || !lozinka) {
+    return res.status(400).json({ error: 'Email i lozinka su obavezni' });
+  }
+
+  db.get('SELECT * FROM users WHERE email = ?', [email], async (err, user) => {
+    if (err || !user) {
+      return res.status(401).json({ error: 'Pogrešan email ili lozinka' });
+    }
+
+    const match = await bcrypt.compare(lozinka, user.password);
+    if (!match) {
+      return res.status(401).json({ error: 'Pogrešan email ili lozinka' });
+    }
+
+    const token = jwt.sign({ userId: user.id, email: user.email }, JWT_SECRET, { expiresIn: '30d' });
+
+    res.json({
+      message: 'Uspešno prijavljivanje',
+      token,
+      user: {
+        ime: user.ime,
+        email: user.email,
+        telefon: user.telefon,
+        lokacija: user.lokacija,
+        nise: JSON.parse(user.nise),
+        opis: user.opis
+      }
+    });
+  });
+});
 // Ruta za dodaj proizvod (npr. tabela 'proizvodi' ako imaš)
 db.run(`
   CREATE TABLE IF NOT EXISTS proizvodi (
@@ -236,6 +268,7 @@ app.get('/profile', async (req, res) => {
     res.json({ user });
   });
 });
+
 app.listen(port, () => {
   console.log(`Server startovan na portu ${port}`);
 });

@@ -242,7 +242,34 @@ app.post('/add-proizvod', async (req, res) => {
     }
   );
 });
+db.run(`
+  CREATE TABLE IF NOT EXISTS proizvodi (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    userId INTEGER,
+    naziv TEXT,
+    opis TEXT,
+    cena NUMBER,
+    slikaUrl TEXT,
+    created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+  )
+`);
 
+// === NOVA TABELA ZA OBJAVE – OVO DODAJ ===
+db.run(`
+  CREATE TABLE IF NOT EXISTS objave (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    userId INTEGER NOT NULL,
+    tekst TEXT NOT NULL,
+    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+    FOREIGN KEY (userId) REFERENCES users(id)
+  )
+`, (err) => {
+  if (err) {
+    console.error('Greška pri kreiranju tabele objave:', err.message);
+  } else {
+    console.log('Tabela objave kreirana ili postoji');
+  }
+});
 // Ruta za get profil (ako hoćeš da učitaš najnovije podatke iz baze)
 app.get('/profile', async (req, res) => {
   const token = req.headers.authorization?.split(' ')[1];

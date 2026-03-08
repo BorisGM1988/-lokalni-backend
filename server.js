@@ -363,6 +363,34 @@ db.all(
   }
 );
 });
+// Ruta za dobijanje svih prodavaca (za stranicu Svi prodavci)
+app.get('/svi-prodavci', (req, res) => {
+  db.all(
+    `SELECT id, ime, opis, slika, lokacija, nise 
+     FROM users 
+     WHERE ime IS NOT NULL AND ime != '' 
+     ORDER BY ime ASC`,
+    [],
+    (err, rows) => {
+      if (err) {
+        console.error('Greška pri dohvatanju prodavaca:', err.message);
+        return res.status(500).json({ error: 'Greška na serveru' });
+      }
+
+      // Formatiraj podatke za frontend
+      const prodavci = rows.map(row => ({
+        id: row.id,
+        ime: row.ime,
+        opis: row.opis || 'Porodična proizvodnja svežih domaćih proizvoda.',
+        slika: row.slika || 'https://via.placeholder.com/400x220?text=' + encodeURIComponent(row.ime),
+        lokacija: row.lokacija || 'Lokacija nije navedena',
+        nise: row.nise ? JSON.parse(row.nise) : []
+      }));
+
+      res.json(prodavci);
+    }
+  );
+});
 app.listen(port, () => {
   console.log(`Server startovan na portu ${port}`);
 });

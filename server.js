@@ -7,7 +7,17 @@ const cors = require('cors');
 const app = express();
 
 app.use(express.json());
-app.use(cors({ origin: '*' }));
+// CORS - dozvoli pristup sa GitHub Pages i localhost-a
+app.use((req, res, next) => {
+  res.header('Access-Control-Allow-Origin', '*');
+  res.header('Access-Control-Allow-Headers', 'Origin, X-Requested-With, Content-Type, Accept, Authorization');
+  res.header('Access-Control-Allow-Methods', 'GET, POST, PUT, DELETE, OPTIONS');
+  if (req.method === 'OPTIONS') {
+    res.sendStatus(200);
+  } else {
+    next();
+  }
+});
 
 const db = new sqlite3.Database('./users.db');
 

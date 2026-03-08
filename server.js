@@ -5,17 +5,19 @@ const jwt = require('jsonwebtoken');
 const cors = require('cors');
 
 const app = express();
+// RUČNI CORS – ovo radi na Render-u čak i kad paket ne prolazi
 app.use((req, res, next) => {
-  res.header('Access-Control-Allow-Origin', '*');
-  res.header('Access-Control-Allow-Headers', 'Origin, X-Requested-With, Content-Type, Accept, Authorization');
-  res.header('Access-Control-Allow-Methods', 'GET, POST, PUT, DELETE, OPTIONS');
+  res.setHeader('Access-Control-Allow-Origin', '*');
+  res.setHeader('Access-Control-Allow-Methods', 'GET, POST, PUT, DELETE, OPTIONS');
+  res.setHeader('Access-Control-Allow-Headers', 'Origin, X-Requested-With, Content-Type, Accept, Authorization');
+  res.setHeader('Access-Control-Allow-Credentials', 'true');
+
   if (req.method === 'OPTIONS') {
-    res.sendStatus(200);
+    res.sendStatus(200); // obavezno za preflight zahtev
   } else {
     next();
   }
 });
-
 
 app.use(express.json());
 

@@ -332,6 +332,37 @@ app.post('/objavi-novost', (req, res) => {
     }
   );
 });
+// ==================== RUTA ZA UČITAVANJE MOJIH OBJAVA ====================
+app.get('/moje-objave', (req, res) => {
+  const token = req.headers.authorization?.split(' ')[1];
+
+  if (!token) {
+    return res.status(401).json({ error: 'Niste ulogovani' });
+  }
+
+  let decoded;
+  try {
+    decoded = jwt.verify(token, JWT_SECRET);
+  } catch {
+    return res.status(401).json({ error: 'Nevažeći token' });
+  }
+
+  db.all(
+    `SELECT id, tekst, created_at 
+     FROM objave 
+     WHERE userId = ? 
+     ORDER BY created_at DESC`,
+    [decoded.userId],
+    (err, rows) => {
+      if (err) {
+        console.error('Greška pri dohvatanju objava:', err.message);
+        return res.status(500).json({ error: 'Greška na serveru' });
+      }
+
+      res.json(rows);
+    }
+  );
+});
 app.listen(port, () => {
   console.log(`Server startovan na portu ${port}`);
 });

@@ -347,21 +347,21 @@ app.get('/moje-objave', (req, res) => {
     return res.status(401).json({ error: 'Nevažeći token' });
   }
 
-  db.all(
-    `SELECT id, tekst, created_at 
-     FROM objave 
-     WHERE userId = ? 
-     ORDER BY created_at DESC`,
-    [decoded.userId],
-    (err, rows) => {
-      if (err) {
-        console.error('Greška pri dohvatanju objava:', err.message);
-        return res.status(500).json({ error: 'Greška na serveru' });
-      }
-
-      res.json(rows);
+db.all(
+  `SELECT id, tekst, created_at 
+   FROM objave 
+   WHERE userId = ? 
+   ORDER BY created_at DESC`,
+  [decoded.userId],   // ← OVO MORA BITI decoded.userId (ne hardkodirano!)
+  (err, rows) => {
+    if (err) {
+      console.error('Greška pri dohvatanju objava:', err.message);
+      return res.status(500).json({ error: 'Greška na serveru' });
     }
-  );
+
+    res.json(rows);
+  }
+);
 });
 app.listen(port, () => {
   console.log(`Server startovan na portu ${port}`);

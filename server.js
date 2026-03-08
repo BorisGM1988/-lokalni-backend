@@ -295,7 +295,43 @@ app.get('/profile', async (req, res) => {
     res.json({ user });
   });
 });
+// ==================== NOVA RUTA ZA OBJAVLJIVANJE NOVOSTI ====================
+app.post('/objavi-novost', (req, res) => {
+  const token = req.headers.authorization?.split(' ')[1];
 
+  if (!token) {
+    return res.status(401).json({ error: 'Niste ulogovani' });
+  }
+
+  let decoded;
+  try {
+    decoded = jwt.verify(token, JWT_SECRET);
+  } catch {
+    return res.status(401).json({ error: 'Nevažeći token' });
+  }
+
+  const { tekst } = req.body;
+
+  if (!tekst || tekst.trim() === '') {
+    return res.status(400).json({ error: 'Tekst objave ne može biti prazan' });
+  }
+
+  db.run(
+    `INSERT INTO objave (userId, tekst) VALUES (?, ?)`,
+    [decoded.userId, tekst.trim()],
+    function (err) {
+      if (err) {
+        console.error('Greška pri dodavanju objave:', err.message);
+        return res.status(500).json({ error: 'Greška na serveru' });
+      }
+
+      res.json({ 
+        message: 'Objava uspešno dodata!',
+        objavaId: this.lastID 
+      });
+    }
+  );
+});
 app.listen(port, () => {
   console.log(`Server startovan na portu ${port}`);
 });

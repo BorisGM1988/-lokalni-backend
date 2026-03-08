@@ -7,7 +7,7 @@ const cors = require('cors');
 const app = express();
 
 app.use(express.json());
-app.use(cors());
+app.use(cors({ origin: '*' }));
 
 const db = new sqlite3.Database('./users.db');
 

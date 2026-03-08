@@ -5,9 +5,6 @@ const jwt = require('jsonwebtoken');
 const cors = require('cors');
 
 const app = express();
-
-app.use(express.json());
-// CORS - dozvoli pristup sa GitHub Pages i localhost-a
 app.use((req, res, next) => {
   res.header('Access-Control-Allow-Origin', '*');
   res.header('Access-Control-Allow-Headers', 'Origin, X-Requested-With, Content-Type, Accept, Authorization');
@@ -18,6 +15,11 @@ app.use((req, res, next) => {
     next();
   }
 });
+
+
+app.use(express.json());
+
+
 
 const db = new sqlite3.Database('./users.db');
 

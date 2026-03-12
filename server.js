@@ -405,6 +405,56 @@ app.get('/svi-prodavci', (req, res) => {
     }
   );
 });
+// === UPDATE PROFILA (PATCH /profile/update) ===
+app.patch('/profile/update', upload.fields([
+  { name: 'slika', maxCount: 1 },
+  { name: 'coverSlika', maxCount: 1 }
+]), async (req, res) => {
+  const token = req.headers.authorization?.split(' ')[1];
+  if (!token) return res.status(401).json({ error: 'Nema tokena' });
+
+  let decoded;
+  try {
+    decoded = jwt.verify(token, JWT_SECRET);
+  } catch {
+    return res.status(401).json({ error: 'Nevažeći token' });
+  }
+
+  const { ime, opis, telefon, lokacija } = req.body;
+
+  // Upload slika na Cloudinary (ako su poslate)
+  let slikaUrl = null;
+  let coverSlikaUrl = null;
+
+  if (req.files['slika']) {
+    const result = await cloudinary.uploader.upload(req.files['slika'][0].path);
+    slikaUrl = result.secure_url;
+  }
+  if (req.files['coverSlika']) {
+    const result = await cloudinary.uploader.upload(req.files['coverSlika'][0].path);
+    coverSlikaUrl = result.secure_url;
+  }
+
+  // Update u bazi
+  db.run(
+    `UPDATE users SET 
+      ime = COALESCE(?, ime),
+      opis = COALESCE(?, opis),
+      telefon = COALESCE(?, telefon),
+      lokacija = COALESCE(?, lokacija),
+      slika = COALESCE(?, slika),
+      coverSlika = COALESCE(?, coverSlika)
+     WHERE id = ?`,
+    [ime, opis, telefon, lokacija, slikaUrl, coverSlikaUrl, decoded.userId],
+    function(err) {
+      if (err) {
+        console.error(err);
+        return res.status(500).json({ error: 'Greška pri update-u' });
+      }
+      res.json({ success: true, message: 'Profil uspešno izmenjen' });
+    }
+  );
+});
 app.listen(port, () => {
   console.log(`Server startovan na portu ${port}`);
 });

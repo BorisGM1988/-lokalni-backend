@@ -405,7 +405,41 @@ app.get('/svi-prodavci', (req, res) => {
     }
   );
 });
+// Ruta za ažuriranje profila (PATCH /profile/update)
+app.patch('/profile/update', (req, res) => {
+  const token = req.headers.authorization?.split(' ')[1];
+  if (!token) {
+    return res.status(401).json({ error: 'Niste ulogovani' });
+  }
 
+  let decoded;
+  try {
+    decoded = jwt.verify(token, JWT_SECRET);
+  } catch (err) {
+    return res.status(401).json({ error: 'Nevažeći token' });
+  }
+
+  const { ime, opis, telefon, lokacija } = req.body;
+
+  // Ažuriraj samo polja koja su poslata (COALESCE da ne prepisuje NULL)
+  db.run(
+    `UPDATE users SET 
+      ime = COALESCE(?, ime),
+      opis = COALESCE(?, opis),
+      telefon = COALESCE(?, telefon),
+      lokacija = COALESCE(?, lokacija)
+     WHERE id = ?`,
+    [ime, opis, telefon, lokacija, decoded.userId],
+    function (err) {
+      if (err) {
+        console.error('Greška pri ažuriranju profila:', err.message);
+        return res.status(500).json({ error: 'Greška na serveru' });
+      }
+
+      res.json({ success: true, message: 'Profil uspešno izmenjen' });
+    }
+  );
+});
 app.listen(port, () => {
   console.log(`Server startovan na portu ${port}`);
 });

@@ -440,7 +440,7 @@ app.patch('/profile/update', (req, res) => {
     }
   );
 });
-const port = process.env.PORT || 3000
+
 app.listen(port, () => {
   console.log(`Server startovan na portu ${port}`);
 });

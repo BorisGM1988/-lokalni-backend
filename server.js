@@ -406,14 +406,19 @@ app.get('/svi-prodavci', (req, res) => {
   );
 });
 
+// TEST RUTA ZA IZMENU PROFILA – minimalna, bez slika, samo tekst
 app.patch('/profile/update', (req, res) => {
+  console.log('Primljen PATCH /profile/update zahtev:', req.body); // vidi se u Render Logs-u!
+
   const token = req.headers.authorization?.split(' ')[1];
-  if (!token) return res.status(401).json({ error: 'Niste ulogovani' });
+  if (!token) {
+    return res.status(401).json({ error: 'Niste ulogovani' });
+  }
 
   let decoded;
   try {
     decoded = jwt.verify(token, JWT_SECRET);
-  } catch {
+  } catch (err) {
     return res.status(401).json({ error: 'Nevažeći token' });
   }
 
@@ -430,7 +435,7 @@ app.patch('/profile/update', (req, res) => {
     function (err) {
       if (err) {
         console.error('Greška pri ažuriranju profila:', err.message);
-        return res.status(500).json({ error: 'Greška na serveru' });
+        return res.status(500).json({ error: 'Greška na serveru: ' + err.message });
       }
 
       res.json({ success: true, message: 'Profil uspešno izmenjen' });

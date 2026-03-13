@@ -405,23 +405,20 @@ app.get('/svi-prodavci', (req, res) => {
     }
   );
 });
-// Ruta za ažuriranje profila (PATCH /profile/update)
+
 app.patch('/profile/update', (req, res) => {
   const token = req.headers.authorization?.split(' ')[1];
-  if (!token) {
-    return res.status(401).json({ error: 'Niste ulogovani' });
-  }
+  if (!token) return res.status(401).json({ error: 'Niste ulogovani' });
 
   let decoded;
   try {
     decoded = jwt.verify(token, JWT_SECRET);
-  } catch (err) {
+  } catch {
     return res.status(401).json({ error: 'Nevažeći token' });
   }
 
   const { ime, opis, telefon, lokacija } = req.body;
 
-  // Ažuriraj samo polja koja su poslata (COALESCE da ne prepisuje NULL)
   db.run(
     `UPDATE users SET 
       ime = COALESCE(?, ime),

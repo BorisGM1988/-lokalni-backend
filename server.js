@@ -1,3 +1,7 @@
+app.use(express.json());
+app.use(express.urlencoded({ extended: true }));
+const cors = require('cors');
+app.use(cors({ origin: '*', methods: ['GET','POST','PATCH','PUT','DELETE','OPTIONS'], credentials: true }));
 const express = require('express');
 const sqlite3 = require('sqlite3').verbose();
 const bcrypt = require('bcryptjs');

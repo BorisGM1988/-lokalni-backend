@@ -1,4 +1,3 @@
-
 const express = require('express');
 const sqlite3 = require('sqlite3').verbose();
 const bcrypt = require('bcryptjs');
@@ -406,6 +405,7 @@ app.get('/svi-prodavci', (req, res) => {
     }
   );
 });
+
 app.patch('/profile/update', (req, res) => {
   const token = req.headers.authorization?.split(' ')[1];
   if (!token) return res.status(401).json({ error: 'Niste ulogovani' });
@@ -430,7 +430,7 @@ app.patch('/profile/update', (req, res) => {
     function (err) {
       if (err) {
         console.error('Greška pri ažuriranju profila:', err.message);
-        return res.status(500).json({ error: 'Greška na serveru: ' + err.message });
+        return res.status(500).json({ error: 'Greška na serveru' });
       }
 
       res.json({ success: true, message: 'Profil uspešno izmenjen' });
@@ -438,29 +438,7 @@ app.patch('/profile/update', (req, res) => {
   );
 });
 
-// Tabela za proizvode (ako već nemaš)
-db.run(`
-  CREATE TABLE IF NOT EXISTS proizvodi (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    userId INTEGER NOT NULL,
-    naziv TEXT NOT NULL,
-    cena REAL NOT NULL,
-    kolicina INTEGER NOT NULL,
-    glavnaNisa TEXT NOT NULL,
-    podnisa TEXT,
-    slikaUrl TEXT,
-    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-    FOREIGN KEY (userId) REFERENCES users(id)
-  )
-`, (err) => {
-  if (err) {
-    console.error('Greška pri kreiranju tabele proizvodi:', err.message);
-  } else {
-    console.log('Tabela proizvodi kreirana ili postoji');
-  }
-});
-
-
 app.listen(port, () => {
   console.log(`Server startovan na portu ${port}`);
 });
+

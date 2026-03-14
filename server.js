@@ -460,38 +460,7 @@ db.run(`
   }
 });
 
-// POST ruta za dodavanje proizvoda
-app.post('/dodaj-proizvod', (req, res) => {
-  const token = req.headers.authorization?.split(' ')[1];
-  if (!token) return res.status(401).json({ error: 'Niste ulogovani' });
 
-  let decoded;
-  try {
-    decoded = jwt.verify(token, JWT_SECRET);
-  } catch {
-    return res.status(401).json({ error: 'Nevažeći token' });
-  }
-
-  const { naziv, cena, kolicina, glavnaNisa, podnisa, slikaUrl } = req.body;
-
-  if (!naziv || !cena || !kolicina || !glavnaNisa) {
-    return res.status(400).json({ error: 'Obavezna polja nisu popunjena' });
-  }
-
-  db.run(
-    `INSERT INTO proizvodi (userId, naziv, cena, kolicina, glavnaNisa, podnisa, slikaUrl)
-     VALUES (?, ?, ?, ?, ?, ?, ?)`,
-    [decoded.userId, naziv, cena, kolicina, glavnaNisa, podnisa || null, slikaUrl || null],
-    function (err) {
-      if (err) {
-        console.error('Greška pri dodavanju proizvoda:', err.message);
-        return res.status(500).json({ error: 'Greška na serveru' });
-      }
-
-      res.json({ success: true, message: 'Proizvod uspešno dodat', proizvodId: this.lastID });
-    }
-  );
-});
 app.listen(port, () => {
   console.log(`Server startovan na portu ${port}`);
 });

@@ -438,7 +438,60 @@ app.patch('/profile/update', (req, res) => {
   );
 });
 
+// Tabela za proizvode (ako već nemaš)
+db.run(`
+  CREATE TABLE IF NOT EXISTS proizvodi (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    userId INTEGER NOT NULL,
+    naziv TEXT NOT NULL,
+    cena REAL NOT NULL,
+    kolicina INTEGER NOT NULL,
+    glavnaNisa TEXT NOT NULL,
+    podnisa TEXT,
+    slikaUrl TEXT,
+    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+    FOREIGN KEY (userId) REFERENCES users(id)
+  )
+`, (err) => {
+  if (err) {
+    console.error('Greška pri kreiranju tabele proizvodi:', err.message);
+  } else {
+    console.log('Tabela proizvodi kreirana ili postoji');
+  }
+});
 
+// POST ruta za dodavanje proizvoda
+app.post('/dodaj-proizvod', (req, res) => {
+  const token = req.headers.authorization?.split(' ')[1];
+  if (!token) return res.status(401).json({ error: 'Niste ulogovani' });
+
+  let decoded;
+  try {
+    decoded = jwt.verify(token, JWT_SECRET);
+  } catch {
+    return res.status(401).json({ error: 'Nevažeći token' });
+  }
+
+  const { naziv, cena, kolicina, glavnaNisa, podnisa, slikaUrl } = req.body;
+
+  if (!naziv || !cena || !kolicina || !glavnaNisa) {
+    return res.status(400).json({ error: 'Obavezna polja nisu popunjena' });
+  }
+
+  db.run(
+    `INSERT INTO proizvodi (userId, naziv, cena, kolicina, glavnaNisa, podnisa, slikaUrl)
+     VALUES (?, ?, ?, ?, ?, ?, ?)`,
+    [decoded.userId, naziv, cena, kolicina, glavnaNisa, podnisa || null, slikaUrl || null],
+    function (err) {
+      if (err) {
+        console.error('Greška pri dodavanju proizvoda:', err.message);
+        return res.status(500).json({ error: 'Greška na serveru' });
+      }
+
+      res.json({ success: true, message: 'Proizvod uspešno dodat', proizvodId: this.lastID });
+    }
+  );
+});
 app.listen(port, () => {
   console.log(`Server startovan na portu ${port}`);
 });

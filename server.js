@@ -461,7 +461,7 @@ app.get('/test-tabele', (req, res) => {
   });
 });
 // Dodaj multer za upload slika (ako već nemaš)
-const multer = require('multer');
+
 const path = require('path');
 const fs = require('fs');
 

@@ -438,16 +438,6 @@ app.patch('/profile/update', (req, res) => {
   );
 });
 
-const PORT = process.env.PORT || 3000;
-const HOST = '0.0.0.0';
-app.get('/test', (req, res) => {
-  res.json({
-    message: 'Backend radi! Ovo je test ruta.',
-    time: new Date().toISOString(),
-    env: process.env.NODE_ENV || 'development'
-  });
+app.listen(port, () => {
+  console.log(`Server startovan na portu ${port}`);
 });
-app.listen(PORT, HOST, () => {
-  console.log(`Server pokrenut na http://${HOST}:${PORT}`);
-});
-

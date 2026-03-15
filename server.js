@@ -437,6 +437,12 @@ app.patch('/profile/update', (req, res) => {
     }
   );
 });
+app.post('/register', (req, res) => {
+  console.log('POST /register JE UČITANA I PRIMLJENA!'); // OVO MORA DA SE VIDI U LOGOVIMA
+  console.log('Body:', req.body);
+
+  res.json({ success: true, message: 'Test registracija – ruta radi' });
+});
 
 app.listen(port, () => {
   console.log(`Server startovan na portu ${port}`);

@@ -438,7 +438,10 @@ app.patch('/profile/update', (req, res) => {
   );
 });
 
-app.listen(port, () => {
-  console.log(`Server startovan na portu ${port}`);
+const PORT = process.env.PORT || 3000;
+const HOST = '0.0.0.0';
+
+app.listen(PORT, HOST, () => {
+  console.log(`Server pokrenut na http://${HOST}:${PORT}`);
 });
 

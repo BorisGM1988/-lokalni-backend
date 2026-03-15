@@ -1,4 +1,3 @@
-const multer = require('multer');
 const express = require('express');
 const sqlite3 = require('sqlite3').verbose();
 const bcrypt = require('bcryptjs');
@@ -451,6 +450,7 @@ app.get('/test-tabele', (req, res) => {
     res.json({ tables: tables.map(t => t.name) });
   });
 });
+
 app.use('/uploads', express.static('uploads'));
 app.listen(port, () => {
   console.log(`Server startovan na portu ${port}`);

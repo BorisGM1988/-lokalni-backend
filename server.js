@@ -452,6 +452,13 @@ app.get('/test-korisnici', (req, res) => {
     res.json(rows);  // vratića JSON sa svim korisnicima
   });
 });
+app.get('/test-tabele', (req, res) => {
+  db.all("SELECT name FROM sqlite_master WHERE type='table'", [], (err, tables) => {
+    if (err) return res.status(500).json({ error: err.message });
+    if (tables.length === 0) return res.json({ message: 'Baza je prazna - nema tabela' });
+    res.json({ tables: tables.map(t => t.name) });
+  });
+});
 app.listen(port, () => {
   console.log(`Server startovan na portu ${port}`);
 });

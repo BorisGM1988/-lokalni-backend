@@ -443,7 +443,15 @@ app.post('/register', (req, res) => {
 
   res.json({ success: true, message: 'Test registracija – ruta radi' });
 });
-
+app.get('/test-korisnici', (req, res) => {
+  db.all('SELECT * FROM korisnici', [], (err, rows) => {  // ako se tabela zove drugačije, promeni 'korisnici'
+    if (err) {
+      console.error(err);
+      return res.status(500).json({ error: 'Greška baze' });
+    }
+    res.json(rows);  // vratića JSON sa svim korisnicima
+  });
+});
 app.listen(port, () => {
   console.log(`Server startovan na portu ${port}`);
 });

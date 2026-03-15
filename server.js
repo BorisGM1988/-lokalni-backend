@@ -460,70 +460,79 @@ app.get('/test-tabele', (req, res) => {
     res.json({ tables: tables.map(t => t.name) });
   });
 });
-// Dodaj multer za upload slika (ako već nemaš)
-
+// === MULTER ZA UPLOAD SLIKA – JEDNOM ===
+const multer = require('multer');
 const path = require('path');
 const fs = require('fs');
 
-// Kreiraj folder uploads ako ne postoji
+// Kreiraj folder za slike ako ne postoji
 const uploadDir = './uploads';
 if (!fs.existsSync(uploadDir)) {
   fs.mkdirSync(uploadDir);
 }
 
-// Multer konfiguracija
+// Multer podešavanja
 const storage = multer.diskStorage({
   destination: (req, file, cb) => {
     cb(null, uploadDir);
   },
   filename: (req, file, cb) => {
-    const uniqueName = Date.now() + '-' + Math.round(Math.random() * 1E9);
-    cb(null, uniqueName + path.extname(file.originalname));
+    const uniqueSuffix = Date.now() + '-' + Math.round(Math.random() * 1E9);
+    cb(null, uniqueSuffix + path.extname(file.originalname));
   }
 });
 
 const upload = multer({ storage: storage });
 
-// Ruta za update profila (slike + ostali podaci)
+// Ruta za update profila (slike + tekstualna polja)
 app.post('/profile/update', authenticateToken, upload.fields([
-  { name: 'slika', maxCount: 1 },      // profilna
-  { name: 'coverSlika', maxCount: 1 }  // naslovna
+  { name: 'slika', maxCount: 1 },       // profilna slika
+  { name: 'coverSlika', maxCount: 1 }   // naslovna slika
 ]), (req, res) => {
-  console.log('Primljen POST /profile/update'); // log da vidimo da li stiže
-  console.log('Fajlovi:', req.files);
+  console.log('Primljen POST /profile/update – fajlovi:', req.files);
   console.log('Body:', req.body);
 
   const updates = {};
-  if (req.files['slika']) {
+
+  if (req.files && req.files['slika']) {
     updates.slika = `/uploads/${req.files['slika'][0].filename}`;
   }
-  if (req.files['coverSlika']) {
+
+  if (req.files && req.files['coverSlika']) {
     updates.coverSlika = `/uploads/${req.files['coverSlika'][0].filename}`;
   }
 
-  // Dodaj tekstualna polja ako ih šalješ (ime, opis, itd.)
+  // Dodaj tekstualna polja ako postoje
   if (req.body.ime) updates.ime = req.body.ime;
   if (req.body.opis) updates.opis = req.body.opis;
   if (req.body.telefon) updates.telefon = req.body.telefon;
   if (req.body.lokacija) updates.lokacija = req.body.lokacija;
 
   if (Object.keys(updates).length === 0) {
-    return res.status(400).json({ poruka: 'Nema izmena' });
+    return res.status(400).json({ poruka: 'Nema izmena za slanje' });
   }
 
-  // Update u bazi (koristi 'users' tabelu)
+  // Update u bazi (tabela 'users')
   const setClause = Object.keys(updates).map(key => `${key} = ?`).join(', ');
-  const values = [...Object.values(updates), req.user.id]; // req.user.id iz middleware authenticateToken
+  const values = [...Object.values(updates), req.user.id];
 
   db.run(`UPDATE users SET ${setClause} WHERE id = ?`, values, function(err) {
     if (err) {
-      console.error('DB error:', err);
-      return res.status(500).json({ poruka: 'Greška pri ažuriranju' });
+      console.error('Greška pri update-u:', err.message);
+      return res.status(500).json({ poruka: 'Greška pri čuvanju izmena' });
     }
 
-    res.json({ success: true, message: 'Profil ažuriran' });
+    // Vrati uspeh i nove podatke
+    res.json({ 
+      success: true, 
+      message: 'Profil ažuriran',
+      updates 
+    });
   });
 });
+
+// Serviraj slike iz /uploads foldera (da se prikazuju na frontendu)
+app.use('/uploads', express.static('uploads'));
 app.listen(port, () => {
   console.log(`Server startovan na portu ${port}`);
 });

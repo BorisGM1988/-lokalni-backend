@@ -24,24 +24,6 @@ app.use(express.json());
 
 const db = new sqlite3.Database('./users.db');
 
-// Middleware za autentifikaciju (OVO JE BILO NEDOSTAJALO)
-function authenticateToken(req, res, next) {
-  const authHeader = req.headers['authorization'];
-  const token = authHeader && authHeader.split(' ')[1];
-
-  if (!token) {
-    return res.status(401).json({ error: 'Niste ulogovani' });
-  }
-
-  jwt.verify(token, JWT_SECRET, (err, user) => {
-    if (err) {
-      return res.status(403).json({ error: 'Nevažeći token' });
-    }
-    req.user = user; // { userId, email }
-    next();
-  });
-}
-
 db.serialize(() => {
   db.run(`
     CREATE TABLE IF NOT EXISTS users (
@@ -67,7 +49,6 @@ db.serialize(() => {
       kolicina NUMBER,
       glavnaNisa TEXT,
       podnisa TEXT,
-      slikaUrl TEXT,
       created_at DATETIME DEFAULT CURRENT_TIMESTAMP
     )
   `);
@@ -83,7 +64,7 @@ db.serialize(() => {
   `);
 });
 
-const JWT_SECRET = 'moj-super-dug-secret-2026-tajni-kljuc-1234567890abcdef';
+const JWT_SECRET = 'promeni-ovo-u-dug-random-string-za-produkciju-2026';
 
 // TEST RUTA
 app.get('/test', (req, res) => {
@@ -92,8 +73,6 @@ app.get('/test', (req, res) => {
 
 // REGISTRACIJA
 app.post('/register', async (req, res) => {
-  console.log('Primljen POST /register:', req.body);
-
   const { ime, email, lozinka, telefon, lokacija, nise, opis } = req.body;
 
   if (!ime || !email || !lozinka || !telefon || !lokacija) {
@@ -160,31 +139,49 @@ app.post('/login', async (req, res) => {
 });
 
 // GET PROFIL
-app.get('/profile', authenticateToken, (req, res) => {
-  db.get('SELECT * FROM users WHERE id = ?', [req.user.userId], (err, user) => {
-    if (err || !user) return res.status(404).json({ error: 'Korisnik nije pronađen' });
+app.get('/profile', (req, res) => {
+  const token = req.headers.authorization?.split(' ')[1];
+  if (!token) return res.status(401).json({ error: 'Niste ulogovani' });
 
-    res.json({
-      ime: user.ime,
-      email: user.email,
-      telefon: user.telefon,
-      lokacija: user.lokacija,
-      nise: JSON.parse(user.nise || '[]'),
-      opis: user.opis || '',
-      registeredAt: user.created_at
+  try {
+    const decoded = jwt.verify(token, JWT_SECRET);
+    db.get('SELECT * FROM users WHERE id = ?', [decoded.userId], (err, user) => {
+      if (err || !user) return res.status(404).json({ error: 'Korisnik nije pronađen' });
+
+      res.json({
+        ime: user.ime,
+        email: user.email,
+        telefon: user.telefon,
+        lokacija: user.lokacija,
+        nise: JSON.parse(user.nise || '[]'),
+        opis: user.opis || '',
+        registeredAt: user.created_at
+      });
     });
-  });
+  } catch (err) {
+    res.status(401).json({ error: 'Nevažeći token' });
+  }
 });
 
 // OBJAVI NOVOST
-app.post('/objavi-novost', authenticateToken, (req, res) => {
+app.post('/objavi-novost', (req, res) => {
+  const token = req.headers.authorization?.split(' ')[1];
+  if (!token) return res.status(401).json({ error: 'Niste ulogovani' });
+
+  let decoded;
+  try {
+    decoded = jwt.verify(token, JWT_SECRET);
+  } catch {
+    return res.status(401).json({ error: 'Nevažeći token' });
+  }
+
   const { tekst } = req.body;
 
   if (!tekst || tekst.trim() === '') return res.status(400).json({ error: 'Tekst objave ne može biti prazan' });
 
   db.run(
     `INSERT INTO objave (userId, tekst) VALUES (?, ?)`,
-    [req.user.userId, tekst.trim()],
+    [decoded.userId, tekst.trim()],
     function (err) {
       if (err) return res.status(500).json({ error: 'Greška na serveru' });
       res.json({ message: 'Objava uspešno dodata!', objavaId: this.lastID });
@@ -193,13 +190,23 @@ app.post('/objavi-novost', authenticateToken, (req, res) => {
 });
 
 // MOJE OBJAVE
-app.get('/moje-objave', authenticateToken, (req, res) => {
+app.get('/moje-objave', (req, res) => {
+  const token = req.headers.authorization?.split(' ')[1];
+  if (!token) return res.status(401).json({ error: 'Niste ulogovani' });
+
+  let decoded;
+  try {
+    decoded = jwt.verify(token, JWT_SECRET);
+  } catch {
+    return res.status(401).json({ error: 'Nevažeći token' });
+  }
+
   db.all(
     `SELECT id, tekst, created_at 
      FROM objave 
      WHERE userId = ? 
      ORDER BY created_at DESC`,
-    [req.user.userId],
+    [decoded.userId],
     (err, rows) => {
       if (err) return res.status(500).json({ error: 'Greška na serveru' });
       res.json(rows);
@@ -232,17 +239,25 @@ app.get('/svi-prodavci', (req, res) => {
 });
 
 // DODAJ PROIZVOD
-app.post('/dodaj-proizvod', authenticateToken, (req, res) => {
+app.post('/dodaj-proizvod', (req, res) => {
   const { naziv, opis, cena, slikaUrl, glavnaNisa, podnisa } = req.body;
 
   if (!naziv || !cena || !glavnaNisa) {
     return res.status(400).json({ poruka: 'Popunite obavezna polja' });
   }
 
+  const token = req.headers.authorization?.split(' ')[1];
+  let decoded;
+  try {
+    decoded = jwt.verify(token, JWT_SECRET);
+  } catch {
+    return res.status(401).json({ poruka: 'Nevažeći token' });
+  }
+
   db.run(
     `INSERT INTO proizvodi (userId, naziv, opis, cena, slikaUrl, glavnaNisa, podnisa)
      VALUES (?, ?, ?, ?, ?, ?, ?)`,
-    [req.user.userId, naziv, opis || null, cena, slikaUrl || null, glavnaNisa, podnisa || ''],
+    [decoded.userId, naziv, opis || null, cena, slikaUrl || null, glavnaNisa, podnisa || ''],
     function (err) {
       if (err) return res.status(500).json({ poruka: 'Greška na serveru' });
       res.json({ message: 'Proizvod uspešno dodan', proizvodId: this.lastID });

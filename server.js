@@ -21,6 +21,22 @@ app.use((req, res, next) => {
 });
 
 app.use(express.json());
+function authenticateToken(req, res, next) {
+  const authHeader = req.headers['authorization'];
+  const token = authHeader && authHeader.split(' ')[1];
+
+  if (!token) {
+    return res.status(401).json({ error: 'Niste ulogovani' });
+  }
+
+  jwt.verify(token, JWT_SECRET, (err, user) => {
+    if (err) {
+      return res.status(403).json({ error: 'Nevažeći token' });
+    }
+    req.user = user; // ovo je ključno – stavlja userId u req.user
+    next();
+  });
+}
 
 const db = new sqlite3.Database('./users.db');
 

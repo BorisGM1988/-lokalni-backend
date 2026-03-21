@@ -24,6 +24,24 @@ app.use(express.json());
 
 const db = new sqlite3.Database('./users.db');
 
+// Middleware za autentifikaciju (OVO JE BILO NEDOSTAJALO)
+function authenticateToken(req, res, next) {
+  const authHeader = req.headers['authorization'];
+  const token = authHeader && authHeader.split(' ')[1];
+
+  if (!token) {
+    return res.status(401).json({ error: 'Niste ulogovani' });
+  }
+
+  jwt.verify(token, JWT_SECRET, (err, user) => {
+    if (err) {
+      return res.status(403).json({ error: 'Nevažeći token' });
+    }
+    req.user = user; // { userId, email }
+    next();
+  });
+}
+
 db.serialize(() => {
   db.run(`
     CREATE TABLE IF NOT EXISTS users (
@@ -46,6 +64,9 @@ db.serialize(() => {
       naziv TEXT,
       opis TEXT,
       cena NUMBER,
+      kolicina NUMBER,
+      glavnaNisa TEXT,
+      podnisa TEXT,
       slikaUrl TEXT,
       created_at DATETIME DEFAULT CURRENT_TIMESTAMP
     )
@@ -63,24 +84,6 @@ db.serialize(() => {
 });
 
 const JWT_SECRET = 'moj-super-dug-secret-2026-tajni-kljuc-1234567890abcdef';
-
-// Middleware za proveru tokena
-function authenticateToken(req, res, next) {
-  const authHeader = req.headers['authorization'];
-  const token = authHeader && authHeader.split(' ')[1];
-
-  if (!token) {
-    return res.status(401).json({ error: 'Niste ulogovani' });
-  }
-
-  jwt.verify(token, JWT_SECRET, (err, user) => {
-    if (err) {
-      return res.status(403).json({ error: 'Nevažeći token' });
-    }
-    req.user = user; // { userId, email }
-    next();
-  });
-}
 
 // TEST RUTA
 app.get('/test', (req, res) => {
@@ -173,107 +176,38 @@ app.get('/profile', authenticateToken, (req, res) => {
   });
 });
 
-// UPDATE PROFILA (tekst + slike preko ImgBB)
-app.post('/profile/update', authenticateToken, async (req, res) => {
-  console.log('Primljen POST /profile/update');
+// OBJAVI NOVOST
+app.post('/objavi-novost', authenticateToken, (req, res) => {
+  const { tekst } = req.body;
 
-  const updates = {};
-
-  // Profilna slika (base64)
-  if (req.body.slikaBase64) {
-    try {
-      const response = await fetch('https://api.imgbb.com/1/upload?key=' + process.env.IMGBB_API_KEY, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-        body: new URLSearchParams({ image: req.body.slikaBase64 })
-      });
-      const data = await response.json();
-      if (data.success) {
-        updates.slika = data.data.url;
-      } else {
-        throw new Error(data.error.message || 'ImgBB greška');
-      }
-    } catch (err) {
-      console.error('ImgBB error (profilna):', err);
-      return res.status(500).json({ poruka: 'Greška pri upload-u profilne slike' });
-    }
-  }
-
-  // Naslovna slika (base64)
-  if (req.body.coverSlikaBase64) {
-    try {
-      const response = await fetch('https://api.imgbb.com/1/upload?key=' + process.env.IMGBB_API_KEY, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-        body: new URLSearchParams({ image: req.body.coverSlikaBase64 })
-      });
-      const data = await response.json();
-      if (data.success) {
-        updates.coverSlika = data.data.url;
-      } else {
-        throw new Error(data.error.message || 'ImgBB greška');
-      }
-    } catch (err) {
-      console.error('ImgBB error (naslovna):', err);
-      return res.status(500).json({ poruka: 'Greška pri upload-u naslovne slike' });
-    }
-  }
-
-  // Tekstualna polja
-  if (req.body.ime) updates.ime = req.body.ime;
-  if (req.body.opis) updates.opis = req.body.opis;
-  if (req.body.telefon) updates.telefon = req.body.telefon;
-  if (req.body.lokacija) updates.lokacija = req.body.lokacija;
-
-  if (Object.keys(updates).length === 0) {
-    return res.status(400).json({ poruka: 'Nema izmena' });
-  }
-
-  const setClause = Object.keys(updates).map(key => `${key} = ?`).join(', ');
-  const values = [...Object.values(updates), req.user.userId]; // ← POPRAVLJENO: req.user.userId
-
-  db.run(`UPDATE users SET ${setClause} WHERE id = ?`, values, function(err) {
-    if (err) {
-      console.error('DB error:', err.message);
-      return res.status(500).json({ poruka: 'Greška pri čuvanju' });
-    }
-    res.json({ success: true, message: 'Profil ažuriran', updates });
-  });
-});
-
-// DODAJ PROIZVOD (sa glavnom nišom i podnišom)
-app.post('/dodaj-proizvod', authenticateToken, (req, res) => {
-  console.log('Primljen POST /dodaj-proizvod:', req.body);
-
-  const { naziv, cena, kolicina, glavnaNisa, podnisa } = req.body;
-
-  if (!naziv || !cena || !kolicina || !glavnaNisa) {
-    return res.status(400).json({ poruka: 'Popunite obavezna polja' });
-  }
-
-  const token = req.headers.authorization?.split(' ')[1];
-  let decoded;
-  try {
-    decoded = jwt.verify(token, JWT_SECRET);
-  } catch {
-    return res.status(401).json({ poruka: 'Nevažeći token' });
-  }
+  if (!tekst || tekst.trim() === '') return res.status(400).json({ error: 'Tekst objave ne može biti prazan' });
 
   db.run(
-    `INSERT INTO proizvodi (userId, naziv, cena, kolicina, glavnaNisa, podnisa)
-     VALUES (?, ?, ?, ?, ?, ?)`,
-    [decoded.userId, naziv, cena, kolicina, glavnaNisa, podnisa || ''],
-    function(err) {
-      if (err) {
-        console.error('Greška pri dodavanju proizvoda:', err.message);
-        return res.status(500).json({ poruka: 'Greška na serveru' });
-      }
-      res.json({ success: true, message: 'Proizvod dodan', proizvodId: this.lastID });
+    `INSERT INTO objave (userId, tekst) VALUES (?, ?)`,
+    [req.user.userId, tekst.trim()],
+    function (err) {
+      if (err) return res.status(500).json({ error: 'Greška na serveru' });
+      res.json({ message: 'Objava uspešno dodata!', objavaId: this.lastID });
     }
   );
 });
 
-// OSTALE RUTE (tvoje originalne)
+// MOJE OBJAVE
+app.get('/moje-objave', authenticateToken, (req, res) => {
+  db.all(
+    `SELECT id, tekst, created_at 
+     FROM objave 
+     WHERE userId = ? 
+     ORDER BY created_at DESC`,
+    [req.user.userId],
+    (err, rows) => {
+      if (err) return res.status(500).json({ error: 'Greška na serveru' });
+      res.json(rows);
+    }
+  );
+});
+
+// SVI PRODAVCi
 app.get('/svi-prodavci', (req, res) => {
   db.all(
     `SELECT id, ime, opis, slika, lokacija, nise 
@@ -297,8 +231,24 @@ app.get('/svi-prodavci', (req, res) => {
   );
 });
 
-app.post('/objavi-novost', (req, res) => { /* tvoj originalni kod */ });
-app.get('/moje-objave', (req, res) => { /* tvoj originalni kod */ });
+// DODAJ PROIZVOD
+app.post('/dodaj-proizvod', authenticateToken, (req, res) => {
+  const { naziv, opis, cena, slikaUrl, glavnaNisa, podnisa } = req.body;
+
+  if (!naziv || !cena || !glavnaNisa) {
+    return res.status(400).json({ poruka: 'Popunite obavezna polja' });
+  }
+
+  db.run(
+    `INSERT INTO proizvodi (userId, naziv, opis, cena, slikaUrl, glavnaNisa, podnisa)
+     VALUES (?, ?, ?, ?, ?, ?, ?)`,
+    [req.user.userId, naziv, opis || null, cena, slikaUrl || null, glavnaNisa, podnisa || ''],
+    function (err) {
+      if (err) return res.status(500).json({ poruka: 'Greška na serveru' });
+      res.json({ message: 'Proizvod uspešno dodan', proizvodId: this.lastID });
+    }
+  );
+});
 
 const port = process.env.PORT || 3000;
 app.listen(port, () => {

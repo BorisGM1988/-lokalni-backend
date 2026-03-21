@@ -217,6 +217,7 @@ app.get('/moje-objave', (req, res) => {
 // SVI PRODAVCi
 app.get('/svi-prodavci', (req, res) => {
   console.log('Pozvana ruta /svi-prodavci – učitavanje svih korisnika');
+
   db.all(
     `SELECT id, ime, opis, slika, lokacija, nise 
      FROM users 
@@ -224,20 +225,29 @@ app.get('/svi-prodavci', (req, res) => {
     [],
     (err, rows) => {
       if (err) {
-        console.error('Greška pri dohvatanju prodavaca:', err.message);
-        return res.status(500).json({ error: 'Greška na serveru' });
+        console.error('SQL greška u /svi-prodavci:', err.message);
+        return res.status(500).json({ error: 'Greška u bazi: ' + err.message });
       }
 
       console.log('Pronađeno korisnika:', rows.length);
 
-      const prodavci = rows.map(row => ({
-        id: row.id,
-        ime: row.ime || 'Bez imena',
-        opis: row.opis || 'Porodična proizvodnja svežih domaćih proizvoda.',
-        slika: row.slika || 'https://via.placeholder.com/400x220?text=' + encodeURIComponent(row.ime || 'Prodavac'),
-        lokacija: row.lokacija || 'Lokacija nije navedena',
-        nise: row.nise ? JSON.parse(row.nise) : []
-      }));
+      const prodavci = rows.map(row => {
+        let niseParsed = [];
+        try {
+          niseParsed = row.nise ? JSON.parse(row.nise) : [];
+        } catch (parseErr) {
+          console.error('Greška pri parsiranju niša za korisnika', row.id, parseErr);
+        }
+
+        return {
+          id: row.id,
+          ime: row.ime || 'Bez imena',
+          opis: row.opis || 'Porodična proizvodnja svežih domaćih proizvoda.',
+          slika: row.slika || 'https://via.placeholder.com/400x220?text=' + encodeURIComponent(row.ime || 'Prodavac'),
+          lokacija: row.lokacija || 'Lokacija nije navedena',
+          nise: niseParsed
+        };
+      });
 
       res.json(prodavci);
     }

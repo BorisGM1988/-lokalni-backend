@@ -452,6 +452,69 @@ app.get('/test-tabele', (req, res) => {
 });
 
 app.use('/uploads', express.static('uploads'));
+app.post('/profile/update', authenticateToken, async (req, res) => {
+  console.log('Primljen POST /profile/update');
+
+  const updates = {};
+
+  // Profilna slika (base64)
+  if (req.body.slikaBase64) {
+    try {
+      const response = await fetch('https://api.imgbb.com/1/upload?key=' + process.env.IMGBB_API_KEY, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+        body: new URLSearchParams({ image: req.body.slikaBase64 })
+      });
+      const data = await response.json();
+      if (data.success) {
+        updates.slika = data.data.url;
+      } else {
+        throw new Error(data.error.message || 'ImgBB greška');
+      }
+    } catch (err) {
+      console.error('ImgBB error (profilna):', err);
+      return res.status(500).json({ poruka: 'Greška pri upload-u profilne slike' });
+    }
+  }
+
+  // Naslovna slika – kopiraj blok i zameni slikaBase64 sa coverSlikaBase64
+  if (req.body.coverSlikaBase64) {
+    try {
+      const response = await fetch('https://api.imgbb.com/1/upload?key=' + process.env.IMGBB_API_KEY, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+        body: new URLSearchParams({ image: req.body.coverSlikaBase64 })
+      });
+      const data = await response.json();
+      if (data.success) {
+        updates.coverSlika = data.data.url;
+      } else {
+        throw new Error(data.error.message || 'ImgBB greška');
+      }
+    } catch (err) {
+      console.error('ImgBB error (naslovna):', err);
+      return res.status(500).json({ poruka: 'Greška pri upload-u naslovne slike' });
+    }
+  }
+
+  // Tekstualna polja (ime, opis, itd.)
+  if (req.body.ime) updates.ime = req.body.ime;
+  if (req.body.opis) updates.opis = req.body.opis;
+  if (req.body.telefon) updates.telefon = req.body.telefon;
+  if (req.body.lokacija) updates.lokacija = req.body.lokacija;
+
+  if (Object.keys(updates).length === 0) {
+    return res.status(400).json({ poruka: 'Nema izmena' });
+  }
+
+  const setClause = Object.keys(updates).map(key => `${key} = ?`).join(', ');
+  const values = [...Object.values(updates), req.user.id];
+
+  db.run(`UPDATE users SET ${setClause} WHERE id = ?`, values, function(err) {
+    if (err) return res.status(500).json({ poruka: 'Greška pri čuvanju' });
+    res.json({ success: true, message: 'Profil ažuriran', updates });
+  });
+});
 app.listen(port, () => {
   console.log(`Server startovan na portu ${port}`);
 });

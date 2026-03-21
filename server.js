@@ -228,7 +228,7 @@ app.get('/svi-prodavci', (req, res) => {
         return res.status(500).json({ error: 'Greška na serveru' });
       }
 
-      console.log('Broj pronađenih prodavaca:', rows.length);
+      console.log('Pronađeno korisnika:', rows.length);
 
       const prodavci = rows.map(row => ({
         id: row.id,

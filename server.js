@@ -216,13 +216,19 @@ app.get('/moje-objave', (req, res) => {
 
 // SVI PRODAVCi
 app.get('/svi-prodavci', (req, res) => {
+  console.log('Pozvana ruta /svi-prodavci – učitavanje svih korisnika');
   db.all(
     `SELECT id, ime, opis, slika, lokacija, nise 
      FROM users 
      ORDER BY ime ASC`,
     [],
     (err, rows) => {
-      if (err) return res.status(500).json({ error: 'Greška na serveru' });
+      if (err) {
+        console.error('Greška pri dohvatanju prodavaca:', err.message);
+        return res.status(500).json({ error: 'Greška na serveru' });
+      }
+
+      console.log('Broj pronađenih prodavaca:', rows.length);
 
       const prodavci = rows.map(row => ({
         id: row.id,

@@ -274,17 +274,16 @@ app.get('/svi-prodavci', (req, res) => {
   db.all(
     `SELECT id, ime, opis, slika, lokacija, nise 
      FROM users 
-     WHERE ime IS NOT NULL AND ime != '' 
-     ORDER BY ime ASC`,
+     ORDER BY ime ASC`,  // ← OVO JE POPRAVLJENO – nema WHERE
     [],
     (err, rows) => {
       if (err) return res.status(500).json({ error: 'Greška na serveru' });
 
       const prodavci = rows.map(row => ({
         id: row.id,
-        ime: row.ime,
+        ime: row.ime || 'Bez imena',  // ← ako nema ime, stavi placeholder
         opis: row.opis || 'Porodična proizvodnja svežih domaćih proizvoda.',
-        slika: row.slika || 'https://via.placeholder.com/400x220?text=' + encodeURIComponent(row.ime),
+        slika: row.slika || 'https://via.placeholder.com/400x220?text=' + encodeURIComponent(row.ime || 'Prodavac'),
         lokacija: row.lokacija || 'Lokacija nije navedena',
         nise: row.nise ? JSON.parse(row.nise) : []
       }));

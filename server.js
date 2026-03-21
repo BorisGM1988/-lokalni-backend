@@ -342,6 +342,17 @@ app.get('/moje-objave', (req, res) => {
     }
   );
 });
+// TEST RUTA ZA UPDATE PROFILA (da vidimo da li stiže zahtev)
+app.post('/profile/update', authenticateToken, (req, res) => {
+  console.log('Primljen POST /profile/update – body:', req.body);
+  res.json({ success: true, message: 'Ruta postoji – test' });
+});
+
+// TEST RUTA ZA DODAJ PROIZVOD
+app.post('/dodaj-proizvod', authenticateToken, (req, res) => {
+  console.log('Primljen POST /dodaj-proizvod:', req.body);
+  res.json({ success: true, message: 'Proizvod dodan – test' });
+});
 
 const port = process.env.PORT || 3000;
 app.listen(port, () => {

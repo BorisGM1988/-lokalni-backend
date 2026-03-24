@@ -287,7 +287,37 @@ app.post('/dodaj-proizvod', (req, res) => {
     }
   );
 });
+// === GET PROIZVODI PO GLAVNOJ NIŠI I PODNIŠI ===
+app.get('/proizvodi', (req, res) => {
+  const { glavnaNisa, podnisa } = req.query;
 
+  let sql = `
+    SELECT p.*, u.ime as prodavacIme, u.lokacija as prodavacLokacija 
+    FROM proizvodi p 
+    JOIN users u ON p.userId = u.id 
+    WHERE 1=1
+  `;
+  const params = [];
+
+  if (glavnaNisa) {
+    sql += ` AND p.glavnaNisa = ?`;
+    params.push(glavnaNisa);
+  }
+  if (podnisa) {
+    sql += ` AND p.podnisa = ?`;
+    params.push(podnisa);
+  }
+
+  sql += ` ORDER BY p.created_at DESC`;
+
+  db.all(sql, params, (err, rows) => {
+    if (err) {
+      console.error(err);
+      return res.status(500).json({ error: "Greška pri učitavanju proizvoda" });
+    }
+    res.json(rows);
+  });
+});
 const port = process.env.PORT || 3000;
 app.listen(port, () => {
   console.log(`Server startovan na portu ${port}`);

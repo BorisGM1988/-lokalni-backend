@@ -255,28 +255,35 @@ app.get('/svi-prodavci', (req, res) => {
 });
 
 // DODAJ PROIZVOD
+// === DODAJ NOVI PROIZVOD ===
 app.post('/dodaj-proizvod', (req, res) => {
-  const { naziv, opis, cena, slikaUrl, glavnaNisa, podnisa } = req.body;
-
-  if (!naziv || !cena || !glavnaNisa) {
-    return res.status(400).json({ poruka: 'Popunite obavezna polja' });
-  }
-
   const token = req.headers.authorization?.split(' ')[1];
+  if (!token) return res.status(401).json({ error: 'Niste ulogovani' });
+
   let decoded;
   try {
     decoded = jwt.verify(token, JWT_SECRET);
   } catch {
-    return res.status(401).json({ poruka: 'Nevažeći token' });
+    return res.status(401).json({ error: 'Nevažeći token' });
+  }
+
+  const { naziv, cena, kolicina, glavnaNisa, podnisa, opis } = req.body;
+
+  if (!naziv || !cena || !kolicina || !glavnaNisa) {
+    return res.status(400).json({ error: 'Obavezna polja nisu popunjena' });
   }
 
   db.run(
-    `INSERT INTO proizvodi (userId, naziv, opis, cena, slikaUrl, glavnaNisa, podnisa)
+    `INSERT INTO proizvodi (userId, naziv, opis, cena, kolicina, glavnaNisa, podnisa)
      VALUES (?, ?, ?, ?, ?, ?, ?)`,
-    [decoded.userId, naziv, opis || null, cena, slikaUrl || null, glavnaNisa, podnisa || ''],
-    function (err) {
-      if (err) return res.status(500).json({ poruka: 'Greška na serveru' });
-      res.json({ message: 'Proizvod uspešno dodan', proizvodId: this.lastID });
+    [decoded.userId, naziv, opis || null, cena, kolicina, glavnaNisa, podnisa || null],
+    function(err) {
+      if (err) return res.status(500).json({ error: 'Greška pri dodavanju proizvoda' });
+      
+      res.status(201).json({
+        message: 'Proizvod uspešno izložen na pijac!',
+        proizvodId: this.lastID
+      });
     }
   );
 });

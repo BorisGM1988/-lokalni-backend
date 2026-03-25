@@ -318,6 +318,46 @@ app.get('/proizvodi', (req, res) => {
     res.json(rows);
   });
 });
+// === DELETE PROIZVOD - samo vlasnik može da obriše ===
+app.delete('/proizvod/:id', (req, res) => {
+  const token = req.headers.authorization?.split(' ')[1];
+  if (!token) {
+    return res.status(401).json({ error: 'Niste ulogovani' });
+  }
+
+  let decoded;
+  try {
+    decoded = jwt.verify(token, JWT_SECRET);
+  } catch (err) {
+    return res.status(401).json({ error: 'Nevažeći token' });
+  }
+
+  const proizvodId = req.params.id;
+
+  // Proveravamo da li proizvod pripada ovom korisniku
+  db.get('SELECT userId FROM proizvodi WHERE id = ?', [proizvodId], (err, row) => {
+    if (err) {
+      console.error(err);
+      return res.status(500).json({ error: 'Greška na serveru' });
+    }
+    if (!row) {
+      return res.status(404).json({ error: 'Proizvod nije pronađen' });
+    }
+    if (row.userId !== decoded.userId) {
+      return res.status(403).json({ error: 'Nemate dozvolu da obrišete ovaj proizvod' });
+    }
+
+    // Brišemo proizvod
+    db.run('DELETE FROM proizvodi WHERE id = ?', [proizvodId], function(err) {
+      if (err) {
+        console.error(err);
+        return res.status(500).json({ error: 'Greška pri brisanju proizvoda' });
+      }
+
+      res.json({ message: 'Proizvod uspešno obrisan' });
+    });
+  });
+});
 const port = process.env.PORT || 3000;
 app.listen(port, () => {
   console.log(`Server startovan na portu ${port}`);

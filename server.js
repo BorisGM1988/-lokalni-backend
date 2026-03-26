@@ -138,23 +138,60 @@ app.post('/login', async (req, res) => {
   });
 });
 
-// GET PROFIL
+// GET PROFILE - podržava i tuđi profil preko ?userId=
 app.get('/profile', (req, res) => {
-  const token = req.headers.authorization?.split(' ')[1];
-  if (!token) return res.status(401).json({ error: 'Niste ulogovani' });
+  const { userId } = req.query;                    // <--- uzimamo userId iz query parametra
+  const authHeader = req.headers.authorization;
+  let token = null;
+
+  if (authHeader && authHeader.startsWith('Bearer ')) {
+    token = authHeader.split(' ')[1];
+  }
+
+  // Ako postoji userId u URL-u, prikaži taj profil (javni pristup)
+  if (userId) {
+    db.get('SELECT id, ime, email, telefon, lokacija, opis, nise, created_at as registeredAt FROM users WHERE id = ?', 
+      [userId], (err, user) => {
+        if (err) {
+          return res.status(500).json({ error: 'Greška na serveru' });
+        }
+        if (!user) {
+          return res.status(404).json({ error: 'Korisnik nije pronađen' });
+        }
+
+        res.json({
+          ime: user.ime,
+          email: user.email,
+          telefon: user.telefon,
+          lokacija: user.lokacija,
+          opis: user.opis || '',
+          nise: user.nise ? JSON.parse(user.nise) : [],
+          registeredAt: user.registeredAt
+        });
+      });
+    return;
+  }
+
+  // Ako nema userId u URL-u, prikaži profil ulogovanog korisnika (kao ranije)
+  if (!token) {
+    return res.status(401).json({ error: 'Niste ulogovani' });
+  }
 
   try {
     const decoded = jwt.verify(token, JWT_SECRET);
+
     db.get('SELECT * FROM users WHERE id = ?', [decoded.userId], (err, user) => {
-      if (err || !user) return res.status(404).json({ error: 'Korisnik nije pronađen' });
+      if (err || !user) {
+        return res.status(404).json({ error: 'Korisnik nije pronađen' });
+      }
 
       res.json({
         ime: user.ime,
         email: user.email,
         telefon: user.telefon,
         lokacija: user.lokacija,
-        nise: JSON.parse(user.nise || '[]'),
         opis: user.opis || '',
+        nise: user.nise ? JSON.parse(user.nise) : [],
         registeredAt: user.created_at
       });
     });

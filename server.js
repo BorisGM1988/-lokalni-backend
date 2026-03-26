@@ -140,7 +140,7 @@ app.post('/login', async (req, res) => {
 
 // GET PROFILE - podržava i tuđi profil preko ?userId=
 app.get('/profile', (req, res) => {
-  const { userId } = req.query;                    // <--- uzimamo userId iz query parametra
+  const { userId } = req.query;                    // uzimamo userId iz URL-a
   const authHeader = req.headers.authorization;
   let token = null;
 
@@ -148,31 +148,35 @@ app.get('/profile', (req, res) => {
     token = authHeader.split(' ')[1];
   }
 
-  // Ako postoji userId u URL-u, prikaži taj profil (javni pristup)
+  // 1. Ako postoji ?userId= u URL-u → prikaži taj profil (javni pristup)
   if (userId) {
-    db.get('SELECT id, ime, email, telefon, lokacija, opis, nise, created_at as registeredAt FROM users WHERE id = ?', 
-      [userId], (err, user) => {
-        if (err) {
-          return res.status(500).json({ error: 'Greška na serveru' });
-        }
-        if (!user) {
-          return res.status(404).json({ error: 'Korisnik nije pronađen' });
-        }
+    db.get(`
+      SELECT id, ime, email, telefon, lokacija, opis, nise, created_at as registeredAt 
+      FROM users 
+      WHERE id = ?
+    `, [userId], (err, user) => {
+      if (err) {
+        console.error(err);
+        return res.status(500).json({ error: 'Greška na serveru' });
+      }
+      if (!user) {
+        return res.status(404).json({ error: 'Korisnik nije pronađen' });
+      }
 
-        res.json({
-          ime: user.ime,
-          email: user.email,
-          telefon: user.telefon,
-          lokacija: user.lokacija,
-          opis: user.opis || '',
-          nise: user.nise ? JSON.parse(user.nise) : [],
-          registeredAt: user.registeredAt
-        });
+      res.json({
+        ime: user.ime,
+        email: user.email,
+        telefon: user.telefon,
+        lokacija: user.lokacija,
+        opis: user.opis || '',
+        nise: user.nise ? JSON.parse(user.nise) : [],
+        registeredAt: user.registeredAt
       });
+    });
     return;
   }
 
-  // Ako nema userId u URL-u, prikaži profil ulogovanog korisnika (kao ranije)
+  // 2. Ako nema ?userId= → prikaži profil ulogovanog korisnika (kao ranije)
   if (!token) {
     return res.status(401).json({ error: 'Niste ulogovani' });
   }

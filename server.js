@@ -201,8 +201,10 @@ app.get('/profile', (req, res) => {
   }
 });
 
-// ====================== IZMENA PROFILA - NOVA RUTA ======================
+// ====================== IZMENA PROFILA (za tvoj frontend) ======================
 app.put('/profile', (req, res) => {
+  console.log('PUT /profile pozvan - Body:', req.body);
+
   const token = req.headers.authorization?.split(' ')[1];
   if (!token) {
     return res.status(401).json({ error: 'Niste ulogovani' });
@@ -229,7 +231,7 @@ app.put('/profile', (req, res) => {
     [ime, telefon, lokacija, opis || null, niseJson, decoded.userId],
     function(err) {
       if (err) {
-        console.error(err);
+        console.error('Greška pri update-u:', err);
         return res.status(500).json({ error: 'Greška pri čuvanju profila' });
       }
 
@@ -239,10 +241,11 @@ app.put('/profile', (req, res) => {
 
       db.get('SELECT ime, telefon, lokacija, opis, nise, slika FROM users WHERE id = ?', 
         [decoded.userId], (err, user) => {
-        if (err) return res.status(500).json({ error: 'Greška pri učitavanju ažuriranog profila' });
+        if (err) return res.status(500).json({ error: 'Greška pri učitavanju' });
 
         res.json({
           message: 'Profil uspešno izmenjen!',
+          success: true,
           user: {
             ime: user.ime,
             telefon: user.telefon,
@@ -256,7 +259,6 @@ app.put('/profile', (req, res) => {
     }
   );
 });
-
 // OBJAVI NOVOST
 app.post('/objavi-novost', (req, res) => {
   const token = req.headers.authorization?.split(' ')[1];

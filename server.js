@@ -201,9 +201,9 @@ app.get('/profile', (req, res) => {
   }
 });
 
-// ====================== IZMENA PROFILA (za tvoj frontend) ======================
-app.put('/profile', (req, res) => {
-  console.log('PUT /profile pozvan - Body:', req.body);
+// ====================== IZMENA PROFILA - za tvoj frontend ======================
+app.put('/profile/update', (req, res) => {
+  console.log('=== /profile/update pozvan === Body:', req.body);
 
   const token = req.headers.authorization?.split(' ')[1];
   if (!token) {
@@ -231,7 +231,7 @@ app.put('/profile', (req, res) => {
     [ime, telefon, lokacija, opis || null, niseJson, decoded.userId],
     function(err) {
       if (err) {
-        console.error('Greška pri update-u:', err);
+        console.error(err);
         return res.status(500).json({ error: 'Greška pri čuvanju profila' });
       }
 

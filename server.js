@@ -35,9 +35,17 @@ db.serialize(() => {
       lokacija TEXT,
       nise TEXT,
       opis TEXT,
+      slika TEXT,
       created_at DATETIME DEFAULT CURRENT_TIMESTAMP
     )
   `);
+
+  // Dodaj kolonu slika ako ne postoji
+  db.run(`ALTER TABLE users ADD COLUMN slika TEXT`, function(err) {
+    if (err && !err.message.includes('duplicate column name')) {
+      console.error('Greška pri dodavanju kolone slika:', err.message);
+    }
+  });
 
   db.run(`
     CREATE TABLE IF NOT EXISTS proizvodi (
@@ -138,9 +146,9 @@ app.post('/login', async (req, res) => {
   });
 });
 
-// GET PROFILE - podržava i tuđi profil preko ?userId=
+// GET PROFILE
 app.get('/profile', (req, res) => {
-  const { userId } = req.query;                    // uzimamo userId iz URL-a
+  const { userId } = req.query;
   const authHeader = req.headers.authorization;
   let token = null;
 
@@ -148,20 +156,14 @@ app.get('/profile', (req, res) => {
     token = authHeader.split(' ')[1];
   }
 
-  // 1. Ako postoji ?userId= u URL-u → prikaži taj profil (javni pristup)
   if (userId) {
     db.get(`
-      SELECT id, ime, email, telefon, lokacija, opis, nise, created_at as registeredAt 
+      SELECT id, ime, email, telefon, lokacija, opis, nise, slika, created_at as registeredAt 
       FROM users 
       WHERE id = ?
     `, [userId], (err, user) => {
-      if (err) {
-        console.error(err);
-        return res.status(500).json({ error: 'Greška na serveru' });
-      }
-      if (!user) {
-        return res.status(404).json({ error: 'Korisnik nije pronađen' });
-      }
+      if (err) return res.status(500).json({ error: 'Greška na serveru' });
+      if (!user) return res.status(404).json({ error: 'Korisnik nije pronađen' });
 
       res.json({
         ime: user.ime,
@@ -170,24 +172,19 @@ app.get('/profile', (req, res) => {
         lokacija: user.lokacija,
         opis: user.opis || '',
         nise: user.nise ? JSON.parse(user.nise) : [],
+        slika: user.slika || '',
         registeredAt: user.registeredAt
       });
     });
     return;
   }
 
-  // 2. Ako nema ?userId= → prikaži profil ulogovanog korisnika (kao ranije)
-  if (!token) {
-    return res.status(401).json({ error: 'Niste ulogovani' });
-  }
+  if (!token) return res.status(401).json({ error: 'Niste ulogovani' });
 
   try {
     const decoded = jwt.verify(token, JWT_SECRET);
-
     db.get('SELECT * FROM users WHERE id = ?', [decoded.userId], (err, user) => {
-      if (err || !user) {
-        return res.status(404).json({ error: 'Korisnik nije pronađen' });
-      }
+      if (err || !user) return res.status(404).json({ error: 'Korisnik nije pronađen' });
 
       res.json({
         ime: user.ime,
@@ -196,12 +193,68 @@ app.get('/profile', (req, res) => {
         lokacija: user.lokacija,
         opis: user.opis || '',
         nise: user.nise ? JSON.parse(user.nise) : [],
-        registeredAt: user.created_at
+        slika: user.slika || ''
       });
     });
   } catch (err) {
     res.status(401).json({ error: 'Nevažeći token' });
   }
+});
+
+// ====================== IZMENA PROFILA - NOVA RUTA ======================
+app.put('/profile', (req, res) => {
+  const token = req.headers.authorization?.split(' ')[1];
+  if (!token) {
+    return res.status(401).json({ error: 'Niste ulogovani' });
+  }
+
+  let decoded;
+  try {
+    decoded = jwt.verify(token, JWT_SECRET);
+  } catch (err) {
+    return res.status(401).json({ error: 'Nevažeći token' });
+  }
+
+  const { ime, telefon, lokacija, opis, nise } = req.body;
+
+  let niseJson = null;
+  if (nise) {
+    niseJson = JSON.stringify(Array.isArray(nise) ? nise : []);
+  }
+
+  db.run(
+    `UPDATE users 
+     SET ime = ?, telefon = ?, lokacija = ?, opis = ?, nise = ?
+     WHERE id = ?`,
+    [ime, telefon, lokacija, opis || null, niseJson, decoded.userId],
+    function(err) {
+      if (err) {
+        console.error(err);
+        return res.status(500).json({ error: 'Greška pri čuvanju profila' });
+      }
+
+      if (this.changes === 0) {
+        return res.status(404).json({ error: 'Korisnik nije pronađen' });
+      }
+
+      db.get('SELECT ime, telefon, lokacija, opis, nise, slika FROM users WHERE id = ?', 
+        [decoded.userId], (err, user) => {
+        if (err) return res.status(500).json({ error: 'Greška pri učitavanju ažuriranog profila' });
+
+        res.json({
+          message: 'Profil uspešno izmenjen!',
+          user: {
+            ime: user.ime,
+            telefon: user.telefon,
+            lokacija: user.lokacija,
+            opis: user.opis || '',
+            nise: user.nise ? JSON.parse(user.nise) : [],
+            slika: user.slika || ''
+          }
+        });
+      });
+    }
+  );
 });
 
 // OBJAVI NOVOST
@@ -257,29 +310,19 @@ app.get('/moje-objave', (req, res) => {
 
 // SVI PRODAVCi
 app.get('/svi-prodavci', (req, res) => {
-  console.log('Pozvana ruta /svi-prodavci – učitavanje svih korisnika');
-
   db.all(
     `SELECT id, ime, opis, slika, lokacija, nise 
      FROM users 
      ORDER BY ime ASC`,
     [],
     (err, rows) => {
-      if (err) {
-        console.error('SQL greška u /svi-prodavci:', err.message);
-        return res.status(500).json({ error: 'Greška u bazi: ' + err.message });
-      }
-
-      console.log('Pronađeno korisnika:', rows.length);
+      if (err) return res.status(500).json({ error: 'Greška u bazi: ' + err.message });
 
       const prodavci = rows.map(row => {
         let niseParsed = [];
         try {
           niseParsed = row.nise ? JSON.parse(row.nise) : [];
-        } catch (parseErr) {
-          console.error('Greška pri parsiranju niša za korisnika', row.id, parseErr);
-        }
-
+        } catch (e) {}
         return {
           id: row.id,
           ime: row.ime || 'Bez imena',
@@ -296,7 +339,6 @@ app.get('/svi-prodavci', (req, res) => {
 });
 
 // DODAJ PROIZVOD
-// === DODAJ NOVI PROIZVOD ===
 app.post('/dodaj-proizvod', (req, res) => {
   const token = req.headers.authorization?.split(' ')[1];
   if (!token) return res.status(401).json({ error: 'Niste ulogovani' });
@@ -328,7 +370,8 @@ app.post('/dodaj-proizvod', (req, res) => {
     }
   );
 });
-// === GET PROIZVODI PO GLAVNOJ NIŠI I PODNIŠI ===
+
+// GET PROIZVODI
 app.get('/proizvodi', (req, res) => {
   const { glavnaNisa, podnisa } = req.query;
 
@@ -352,53 +395,37 @@ app.get('/proizvodi', (req, res) => {
   sql += ` ORDER BY p.created_at DESC`;
 
   db.all(sql, params, (err, rows) => {
-    if (err) {
-      console.error(err);
-      return res.status(500).json({ error: "Greška pri učitavanju proizvoda" });
-    }
+    if (err) return res.status(500).json({ error: "Greška pri učitavanju proizvoda" });
     res.json(rows);
   });
 });
-// === DELETE PROIZVOD - samo vlasnik može da obriše ===
+
+// DELETE PROIZVOD
 app.delete('/proizvod/:id', (req, res) => {
   const token = req.headers.authorization?.split(' ')[1];
-  if (!token) {
-    return res.status(401).json({ error: 'Niste ulogovani' });
-  }
+  if (!token) return res.status(401).json({ error: 'Niste ulogovani' });
 
   let decoded;
   try {
     decoded = jwt.verify(token, JWT_SECRET);
-  } catch (err) {
+  } catch {
     return res.status(401).json({ error: 'Nevažeći token' });
   }
 
   const proizvodId = req.params.id;
 
-  // Proveravamo da li proizvod pripada ovom korisniku
   db.get('SELECT userId FROM proizvodi WHERE id = ?', [proizvodId], (err, row) => {
-    if (err) {
-      console.error(err);
-      return res.status(500).json({ error: 'Greška na serveru' });
-    }
-    if (!row) {
-      return res.status(404).json({ error: 'Proizvod nije pronađen' });
-    }
-    if (row.userId !== decoded.userId) {
-      return res.status(403).json({ error: 'Nemate dozvolu da obrišete ovaj proizvod' });
-    }
+    if (err) return res.status(500).json({ error: 'Greška na serveru' });
+    if (!row) return res.status(404).json({ error: 'Proizvod nije pronađen' });
+    if (row.userId !== decoded.userId) return res.status(403).json({ error: 'Nemate dozvolu da obrišete ovaj proizvod' });
 
-    // Brišemo proizvod
     db.run('DELETE FROM proizvodi WHERE id = ?', [proizvodId], function(err) {
-      if (err) {
-        console.error(err);
-        return res.status(500).json({ error: 'Greška pri brisanju proizvoda' });
-      }
-
+      if (err) return res.status(500).json({ error: 'Greška pri brisanju proizvoda' });
       res.json({ message: 'Proizvod uspešno obrisan' });
     });
   });
 });
+
 const port = process.env.PORT || 3000;
 app.listen(port, () => {
   console.log(`Server startovan na portu ${port}`);

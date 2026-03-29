@@ -201,64 +201,7 @@ app.get('/profile', (req, res) => {
   }
 });
 
-// ====================== IZMENA PROFILA - za tvoj frontend ======================
-app.put('/profile/update', (req, res) => {
-  console.log('=== /profile/update pozvan === Body:', req.body);
 
-  const token = req.headers.authorization?.split(' ')[1];
-  if (!token) {
-    return res.status(401).json({ error: 'Niste ulogovani' });
-  }
-
-  let decoded;
-  try {
-    decoded = jwt.verify(token, JWT_SECRET);
-  } catch (err) {
-    return res.status(401).json({ error: 'Nevažeći token' });
-  }
-
-  const { ime, telefon, lokacija, opis, nise } = req.body;
-
-  let niseJson = null;
-  if (nise) {
-    niseJson = JSON.stringify(Array.isArray(nise) ? nise : []);
-  }
-
-  db.run(
-    `UPDATE users 
-     SET ime = ?, telefon = ?, lokacija = ?, opis = ?, nise = ?
-     WHERE id = ?`,
-    [ime, telefon, lokacija, opis || null, niseJson, decoded.userId],
-    function(err) {
-      if (err) {
-        console.error(err);
-        return res.status(500).json({ error: 'Greška pri čuvanju profila' });
-      }
-
-      if (this.changes === 0) {
-        return res.status(404).json({ error: 'Korisnik nije pronađen' });
-      }
-
-      db.get('SELECT ime, telefon, lokacija, opis, nise, slika FROM users WHERE id = ?', 
-        [decoded.userId], (err, user) => {
-        if (err) return res.status(500).json({ error: 'Greška pri učitavanju' });
-
-        res.json({
-          message: 'Profil uspešno izmenjen!',
-          success: true,
-          user: {
-            ime: user.ime,
-            telefon: user.telefon,
-            lokacija: user.lokacija,
-            opis: user.opis || '',
-            nise: user.nise ? JSON.parse(user.nise) : [],
-            slika: user.slika || ''
-          }
-        });
-      });
-    }
-  );
-});
 // OBJAVI NOVOST
 app.post('/objavi-novost', (req, res) => {
   const token = req.headers.authorization?.split(' ')[1];

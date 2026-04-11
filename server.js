@@ -410,22 +410,34 @@ app.get('/prodavci-mapa', async (req, res) => {
     for (const row of result.rows) {
       let koordinate = null;
 
-      // Geocoding - pretvara naziv mesta u koordinate
-      try {
-        const geoResponse = await fetch(
-          `https://nominatim.openstreetmap.org/search?q=${encodeURIComponent(row.lokacija + ', Serbia')}&format=json&limit=1`,
-          { headers: { 'User-Agent': 'LokalniPlodovi/1.0' } }
-        );
-        const geoData = await geoResponse.json();
-        if (geoData.length > 0) {
-          koordinate = {
-            lat: parseFloat(geoData[0].lat),
-            lng: parseFloat(geoData[0].lon)
-          };
-        }
-      } catch (e) {
-        console.log('Geocoding greška za:', row.lokacija);
-      }
+     // Geocoding - proba više varijanti
+try {
+  // Uzmi samo prvu reč/grad iz lokacije (npr. "Sabac selo Bela Reka" -> "Sabac")
+  const lokacijaVarijante = [
+    row.lokacija,
+    row.lokacija.split(' ')[0], // Prva reč
+    row.lokacija.split(',')[0]  // Pre prvog zareza
+  ];
+
+  for (const varijanta of lokacijaVarijante) {
+    const geoResponse = await fetch(
+      `https://nominatim.openstreetmap.org/search?q=${encodeURIComponent(varijanta + ', Serbia')}&format=json&limit=1`,
+      { headers: { 'User-Agent': 'LokalniPlodovi/1.0' } }
+    );
+    const geoData = await geoResponse.json();
+    if (geoData.length > 0) {
+      koordinate = {
+        lat: parseFloat(geoData[0].lat),
+        lng: parseFloat(geoData[0].lon)
+      };
+      break; // Našao koordinate, prekini petlju
+    }
+    // Malo čekaj između zahteva
+    await new Promise(r => setTimeout(r, 500));
+  }
+} catch (e) {
+  console.log('Geocoding greška za:', row.lokacija);
+}
 
       if (koordinate) {
         let niseParsed = [];

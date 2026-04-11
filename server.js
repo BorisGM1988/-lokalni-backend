@@ -398,7 +398,58 @@ app.delete('/proizvod/:id', async (req, res) => {
     res.status(500).json({ error: 'Greška pri brisanju' });
   }
 });
+// PRODAVCI ZA MAPU - sa geocodingom
+app.get('/prodavci-mapa', async (req, res) => {
+  try {
+    const result = await pool.query(
+      `SELECT id, ime, opis, slika, lokacija, nise FROM users ORDER BY ime ASC`
+    );
 
+    const prodavci = [];
+
+    for (const row of result.rows) {
+      let koordinate = null;
+
+      // Geocoding - pretvara naziv mesta u koordinate
+      try {
+        const geoResponse = await fetch(
+          `https://nominatim.openstreetmap.org/search?q=${encodeURIComponent(row.lokacija + ', Serbia')}&format=json&limit=1`,
+          { headers: { 'User-Agent': 'LokalniPlodovi/1.0' } }
+        );
+        const geoData = await geoResponse.json();
+        if (geoData.length > 0) {
+          koordinate = {
+            lat: parseFloat(geoData[0].lat),
+            lng: parseFloat(geoData[0].lon)
+          };
+        }
+      } catch (e) {
+        console.log('Geocoding greška za:', row.lokacija);
+      }
+
+      if (koordinate) {
+        let niseParsed = [];
+        try { niseParsed = row.nise ? JSON.parse(row.nise) : []; } catch (e) {}
+
+        prodavci.push({
+          id: row.id,
+          ime: row.ime || 'Bez imena',
+          opis: row.opis || 'Domaći proizvodi',
+          slika: row.slika || '',
+          lokacija: row.lokacija || '',
+          nise: niseParsed,
+          lat: koordinate.lat,
+          lng: koordinate.lng
+        });
+      }
+    }
+
+    res.json(prodavci);
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: 'Greška: ' + err.message });
+  }
+});
 const port = process.env.PORT || 3000;
 app.listen(port, () => {
   console.log(`Server startovan na portu ${port}`);

@@ -346,6 +346,38 @@ app.post('/dodaj-proizvod', async (req, res) => {
     res.status(500).json({ error: 'Greška pri dodavanju proizvoda' });
   }
 });
+// GET PROIZVODI
+app.get('/proizvodi', async (req, res) => {
+  const { glavnaNisa, podnisa } = req.query;
+
+  try {
+    let sql = `
+      SELECT p.*, u.ime as "prodavacIme", u.lokacija as "prodavacLokacija"
+      FROM proizvodi p
+      JOIN users u ON p."userId" = u.id
+      WHERE 1=1
+    `;
+    const params = [];
+    let i = 1;
+
+    if (glavnaNisa) {
+      sql += ` AND p."glavnaNisa" = $${i++}`;
+      params.push(glavnaNisa);
+    }
+    if (podnisa) {
+      sql += ` AND p.podnisa = $${i++}`;
+      params.push(podnisa);
+    }
+
+    sql += ` ORDER BY p.created_at DESC`;
+
+    const result = await pool.query(sql, params);
+    res.json(result.rows);
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: 'Greška pri učitavanju proizvoda' });
+  }
+});
 
 // DELETE PROIZVOD
 app.delete('/proizvod/:id', async (req, res) => {

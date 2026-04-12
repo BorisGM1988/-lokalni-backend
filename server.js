@@ -45,7 +45,7 @@ async function initDB() {
     // Dodaj kolone ako ne postoje (za stare baze)
     await pool.query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS slika TEXT`);
     await pool.query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS cover_slika TEXT`);
-    await pool.query(`ALTER TABLE proizvodi ADD COLUMN IF NOT EXISTS slika TEXT`);
+    
 
     await pool.query(`
       CREATE TABLE IF NOT EXISTS proizvodi (
@@ -60,6 +60,7 @@ async function initDB() {
         created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
       )
     `);
+    await pool.query(`ALTER TABLE proizvodi ADD COLUMN IF NOT EXISTS slika TEXT`);
 
     await pool.query(`
       CREATE TABLE IF NOT EXISTS objave (

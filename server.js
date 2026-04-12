@@ -45,6 +45,7 @@ async function initDB() {
     // Dodaj kolone ako ne postoje (za stare baze)
     await pool.query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS slika TEXT`);
     await pool.query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS cover_slika TEXT`);
+    await pool.query(`ALTER TABLE proizvodi ADD COLUMN IF NOT EXISTS slika TEXT`);
 
     await pool.query(`
       CREATE TABLE IF NOT EXISTS proizvodi (
@@ -323,16 +324,16 @@ app.post('/dodaj-proizvod', async (req, res) => {
 
   try {
     const decoded = jwt.verify(token, JWT_SECRET);
-    const { naziv, cena, kolicina, glavnaNisa, podnisa, opis } = req.body;
+    const { naziv, cena, kolicina, glavnaNisa, podnisa, opis, slikaBase64 } = req.body;
 
     if (!naziv || !cena || !kolicina || !glavnaNisa) {
       return res.status(400).json({ error: 'Obavezna polja nisu popunjena' });
     }
 
     const result = await pool.query(
-      `INSERT INTO proizvodi ("userId", naziv, opis, cena, kolicina, "glavnaNisa", podnisa)
-       VALUES ($1, $2, $3, $4, $5, $6, $7) RETURNING id`,
-      [decoded.userId, naziv, opis || null, cena, kolicina, glavnaNisa, podnisa || null]
+      `INSERT INTO proizvodi ("userId", naziv, opis, cena, kolicina, "glavnaNisa", podnisa, slika)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8) RETURNING id`,
+      [decoded.userId, naziv, opis || null, cena, kolicina, glavnaNisa, podnisa || null, slikaBase64 || null]
     );
 
     res.status(201).json({
@@ -342,39 +343,6 @@ app.post('/dodaj-proizvod', async (req, res) => {
   } catch (err) {
     console.error(err);
     res.status(500).json({ error: 'Greška pri dodavanju proizvoda' });
-  }
-});
-
-// GET PROIZVODI
-app.get('/proizvodi', async (req, res) => {
-  const { glavnaNisa, podnisa } = req.query;
-
-  try {
-    let sql = `
-      SELECT p.*, u.ime as "prodavacIme", u.lokacija as "prodavacLokacija"
-      FROM proizvodi p
-      JOIN users u ON p."userId" = u.id
-      WHERE 1=1
-    `;
-    const params = [];
-    let i = 1;
-
-    if (glavnaNisa) {
-      sql += ` AND p."glavnaNisa" = $${i++}`;
-      params.push(glavnaNisa);
-    }
-    if (podnisa) {
-      sql += ` AND p.podnisa = $${i++}`;
-      params.push(podnisa);
-    }
-
-    sql += ` ORDER BY p.created_at DESC`;
-
-    const result = await pool.query(sql, params);
-    res.json(result.rows);
-  } catch (err) {
-    console.error(err);
-    res.status(500).json({ error: 'Greška pri učitavanju proizvoda' });
   }
 });
 

@@ -16,7 +16,17 @@ app.use((req, res, next) => {
 });
 
 app.use(express.json({ limit: '10mb' }));
-
+// Normalizacija teksta
+function normalizeText(str) {
+  if (!str) return '';
+  return str
+    .toLowerCase()
+    .replace(/š/g, 's')
+    .replace(/đ/g, 'dj')
+    .replace(/č/g, 'c')
+    .replace(/ć/g, 'c')
+    .replace(/ž/g, 'z');
+}
 // PostgreSQL konekcija
 const pool = new Pool({
   connectionString: process.env.DATABASE_URL,
@@ -334,7 +344,7 @@ app.post('/dodaj-proizvod', async (req, res) => {
     const result = await pool.query(
       `INSERT INTO proizvodi ("userId", naziv, opis, cena, kolicina, "glavnaNisa", podnisa, slika)
        VALUES ($1, $2, $3, $4, $5, $6, $7, $8) RETURNING id`,
-      [decoded.userId, naziv, opis || null, cena, kolicina, glavnaNisa, podnisa || null, slikaBase64 || null]
+     [decoded.userId, naziv, opis || null, cena, kolicina, glavnaNisa, normalizeText(podnisa), slikaBase64 || null]
     );
 
     res.status(201).json({

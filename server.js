@@ -365,7 +365,7 @@ app.get('/proizvodi', async (req, res) => {
       params.push(glavnaNisa);
     }
     if (podnisa) {
-      sql += ` AND p.podnisa = $${i++}`;
+     sql += ` AND LOWER(p.podnisa) = LOWER($${i++})`;
       params.push(podnisa);
     }
 

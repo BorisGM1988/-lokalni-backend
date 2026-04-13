@@ -375,8 +375,8 @@ app.get('/proizvodi', async (req, res) => {
       params.push(glavnaNisa);
     }
     if (podnisa) {
-  sql += ` AND p.podnisa = $${i++}`;
-params.push(normalizeText(podnisa));
+       sql += ` AND p.podnisa = $${i++}`;
+       params.push(normalizeText(podnisa));
     }
 
     sql += ` ORDER BY p.created_at DESC`;

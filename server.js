@@ -72,14 +72,16 @@ async function initDB() {
     `);
     await pool.query(`ALTER TABLE proizvodi ADD COLUMN IF NOT EXISTS slika TEXT`);
 
-    await pool.query(`
-      CREATE TABLE IF NOT EXISTS objave (
-        id SERIAL PRIMARY KEY,
-        "userId" INTEGER NOT NULL,
-        tekst TEXT NOT NULL,
-        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-      )
-    `);
+await pool.query(`
+  CREATE TABLE IF NOT EXISTS objave (
+    id SERIAL PRIMARY KEY,
+    "userId" INTEGER NOT NULL,
+    tekst TEXT NOT NULL,
+    slika TEXT,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+  )
+`);
+await pool.query(`ALTER TABLE objave ADD COLUMN IF NOT EXISTS slika TEXT`);
 
     console.log('Baza inicijalizovana uspešno!');
   } catch (err) {
@@ -268,14 +270,14 @@ app.post('/objavi-novost', async (req, res) => {
 
   try {
     const decoded = jwt.verify(token, JWT_SECRET);
-    const { tekst } = req.body;
+    const { tekst, slikaBase64 } = req.body;
 
     if (!tekst || tekst.trim() === '') return res.status(400).json({ error: 'Tekst objave ne može biti prazan' });
 
-    const result = await pool.query(
-      `INSERT INTO objave ("userId", tekst) VALUES ($1, $2) RETURNING id`,
-      [decoded.userId, tekst.trim()]
-    );
+   const result = await pool.query(
+  `INSERT INTO objave ("userId", tekst, slika) VALUES ($1, $2, $3) RETURNING id`,
+  [decoded.userId, tekst.trim(), slikaBase64 || null]
+   );
 
     res.json({ message: 'Objava uspešno dodata!', objavaId: result.rows[0].id });
   } catch (err) {
@@ -298,6 +300,26 @@ app.get('/moje-objave', async (req, res) => {
     res.json(result.rows);
   } catch (err) {
     res.status(401).json({ error: 'Nevažeći token' });
+  }
+});
+// DELETE OBJAVA
+app.delete('/objava/:id', async (req, res) => {
+  const token = req.headers.authorization?.split(' ')[1];
+  if (!token) return res.status(401).json({ error: 'Niste ulogovani' });
+
+  try {
+    const decoded = jwt.verify(token, JWT_SECRET);
+    const objavaId = req.params.id;
+
+    const check = await pool.query('SELECT "userId" FROM objave WHERE id = $1', [objavaId]);
+    if (!check.rows[0]) return res.status(404).json({ error: 'Objava nije pronađena' });
+    if (check.rows[0].userId !== decoded.userId) return res.status(403).json({ error: 'Nemate dozvolu' });
+
+    await pool.query('DELETE FROM objave WHERE id = $1', [objavaId]);
+    res.json({ message: 'Objava uspešno obrisana' });
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: 'Greška pri brisanju' });
   }
 });
 

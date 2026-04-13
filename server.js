@@ -91,7 +91,7 @@ await pool.query(`ALTER TABLE objave ADD COLUMN IF NOT EXISTS slika TEXT`);
 
 initDB();
 
-const JWT_SECRET = 'promeni-ovo-u-dug-random-string-za-produkciju-2026';
+const JWT_SECRET = process.env.JWT_SECRET || 'promeni-ovo-u-dug-random-string-za-produkciju-2026';
 
 // TEST
 app.get('/test', (req, res) => {

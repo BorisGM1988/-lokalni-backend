@@ -294,7 +294,7 @@ app.get('/moje-objave', async (req, res) => {
   try {
     const decoded = jwt.verify(token, JWT_SECRET);
     const result = await pool.query(
-      `SELECT id, tekst, slika, created_at FROM objave WHERE "userId" = $1 ORDER BY created_at DESC`
+      `SELECT id, tekst, slika, created_at FROM objave WHERE "userId" = $1 ORDER BY created_at DESC`,
       [decoded.userId]
     );
     res.json(result.rows);

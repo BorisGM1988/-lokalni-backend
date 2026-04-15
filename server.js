@@ -366,7 +366,7 @@ app.post('/dodaj-proizvod', async (req, res) => {
     const result = await pool.query(
       `INSERT INTO proizvodi ("userId", naziv, opis, cena, kolicina, "glavnaNisa", podnisa, slika)
        VALUES ($1, $2, $3, $4, $5, $6, $7, $8) RETURNING id`,
-     [decoded.userId, naziv, opis || null, cena, kolicina, glavnaNisa, normalizeText(podnisa), slikaBase64 || null]
+     [decoded.userId, naziv, opis || null, cena, kolicina, glavnaNisa, podnisa || null, slikaBase64 || null]
     );
 
     res.status(201).json({

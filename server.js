@@ -446,11 +446,12 @@ app.get('/prodavci-mapa', async (req, res) => {
      // Geocoding - proba više varijanti
 try {
   // Uzmi samo prvu reč/grad iz lokacije (npr. "Sabac selo Bela Reka" -> "Sabac")
- const lokacijaVarijante = [
-  row.lokacija,                          // cela lokacija prvo
-  row.lokacija.split(',')[0].trim(),     // pre prvog zareza
-  row.lokacija.split(' ').slice(0, 2).join(' '), // prve dve reči
-  row.lokacija.split(' ').slice(0, 3).join(' ')  // prve tri reči
+const lokacijaVarijante = [
+  row.lokacija,
+  row.lokacija.split(',')[0].trim(),
+  row.lokacija.split(' ').slice(0, 2).join(' '),
+  row.lokacija.split(' ').slice(0, 3).join(' '),
+  row.lokacija.split(' ')[0].trim() // ← dodaj ovo kao poslednji fallback
 ];
 
   for (const varijanta of lokacijaVarijante) {

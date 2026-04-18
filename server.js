@@ -497,6 +497,95 @@ const lokacijaVarijante = [
     res.status(500).json({ error: 'Greška: ' + err.message });
   }
 });
+// ── ADMIN MIDDLEWARE ──
+function adminAuth(req, res, next) {
+  const lozinka = req.headers['x-admin-password'];
+  if (lozinka !== process.env.ADMIN_PASSWORD) {
+    return res.status(401).json({ error: 'Neovlašćen pristup' });
+  }
+  next();
+}
+
+// ── ADMIN STATISTIKE ──
+app.get('/admin/stats', adminAuth, async (req, res) => {
+  try {
+    const korisnici = await pool.query('SELECT COUNT(*) FROM users');
+    const proizvodi = await pool.query('SELECT COUNT(*) FROM proizvodi');
+    const objave = await pool.query('SELECT COUNT(*) FROM objave');
+    res.json({
+      korisnici: parseInt(korisnici.rows[0].count),
+      proizvodi: parseInt(proizvodi.rows[0].count),
+      objave: parseInt(objave.rows[0].count)
+    });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// ── ADMIN SVI KORISNICI ──
+app.get('/admin/korisnici', adminAuth, async (req, res) => {
+  try {
+    const result = await pool.query(
+      `SELECT id, ime, email, telefon, lokacija, nise, created_at 
+       FROM users ORDER BY created_at DESC`
+    );
+    res.json(result.rows);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// ── ADMIN SVI PROIZVODI ──
+app.get('/admin/proizvodi', adminAuth, async (req, res) => {
+  try {
+    const result = await pool.query(
+      `SELECT p.*, u.ime as "prodavacIme", u.email as "prodavacEmail"
+       FROM proizvodi p
+       JOIN users u ON p."userId" = u.id
+       ORDER BY p.created_at DESC`
+    );
+    res.json(result.rows);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// ── ADMIN SVE OBJAVE ──
+app.get('/admin/objave', adminAuth, async (req, res) => {
+  try {
+    const result = await pool.query(
+      `SELECT o.*, u.ime as "korisnikIme", u.email as "korisnikEmail"
+       FROM objave o
+       JOIN users u ON o."userId" = u.id
+       ORDER BY o.created_at DESC`
+    );
+    res.json(result.rows);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// ── ADMIN OBRISI KORISNIKA ──
+app.delete('/admin/korisnik/:id', adminAuth, async (req, res) => {
+  try {
+    await pool.query('DELETE FROM proizvodi WHERE "userId" = $1', [req.params.id]);
+    await pool.query('DELETE FROM objave WHERE "userId" = $1', [req.params.id]);
+    await pool.query('DELETE FROM users WHERE id = $1', [req.params.id]);
+    res.json({ message: 'Korisnik obrisan' });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// ── ADMIN OBRISI PROIZVOD ──
+app.delete('/admin/proizvod/:id', adminAuth, async (req, res) => {
+  try {
+    await pool.query('DELETE FROM proizvodi WHERE id = $1', [req.params.id]);
+    res.json({ message: 'Proizvod obrisan' });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
 const port = process.env.PORT || 3000;
 app.listen(port, () => {
   console.log(`Server startovan na portu ${port}`);

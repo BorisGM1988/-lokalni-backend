@@ -380,7 +380,7 @@ app.post('/dodaj-proizvod', async (req, res) => {
 });
 // GET PROIZVODI
 app.get('/proizvodi', async (req, res) => {
-  const { glavnaNisa, podnisa } = req.query;
+const { glavnaNisa, podnisa, userId } = req.query;
 
   try {
     let sql = `
@@ -400,6 +400,10 @@ app.get('/proizvodi', async (req, res) => {
    sql += ` AND LOWER(p.podnisa) = LOWER($${i++})`;
    params.push(podnisa);
     }
+    if (userId) {
+  sql += ` AND p."userId" = $${i++}`;
+  params.push(userId);
+}
 
     sql += ` ORDER BY p.created_at DESC`;
 

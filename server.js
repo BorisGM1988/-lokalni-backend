@@ -590,6 +590,18 @@ app.delete('/admin/proizvod/:id', adminAuth, async (req, res) => {
     res.status(500).json({ error: err.message });
   }
 });
+// OBJAVE PO USERID
+app.get('/objave/:userId', async (req, res) => {
+  try {
+    const result = await pool.query(
+      `SELECT id, tekst, slika, created_at FROM objave WHERE "userId" = $1 ORDER BY created_at DESC`,
+      [req.params.userId]
+    );
+    res.json(result.rows);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
 const port = process.env.PORT || 3000;
 app.listen(port, () => {
   console.log(`Server startovan na portu ${port}`);

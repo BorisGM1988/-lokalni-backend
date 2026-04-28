@@ -72,16 +72,28 @@ async function initDB() {
     `);
     await pool.query(`ALTER TABLE proizvodi ADD COLUMN IF NOT EXISTS slika TEXT`);
 
-await pool.query(`
-  CREATE TABLE IF NOT EXISTS objave (
-    id SERIAL PRIMARY KEY,
-    "userId" INTEGER NOT NULL,
-    tekst TEXT NOT NULL,
-    slika TEXT,
-    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-  )
-`);
-await pool.query(`ALTER TABLE objave ADD COLUMN IF NOT EXISTS slika TEXT`);
+    await pool.query(`
+      CREATE TABLE IF NOT EXISTS objave (
+        id SERIAL PRIMARY KEY,
+        "userId" INTEGER NOT NULL,
+        tekst TEXT NOT NULL,
+        slika TEXT,
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+      )
+    `);
+    await pool.query(`ALTER TABLE objave ADD COLUMN IF NOT EXISTS slika TEXT`);
+
+    // NOVO: Tabela za poruke
+    await pool.query(`
+      CREATE TABLE IF NOT EXISTS poruke (
+        id SERIAL PRIMARY KEY,
+        od_user_id INTEGER NOT NULL,
+        ka_user_id INTEGER NOT NULL,
+        tekst TEXT NOT NULL,
+        procitano BOOLEAN DEFAULT FALSE,
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+      )
+    `);
 
     console.log('Baza inicijalizovana uspešno!');
   } catch (err) {
@@ -302,6 +314,7 @@ app.get('/moje-objave', async (req, res) => {
     res.status(401).json({ error: 'Nevažeći token' });
   }
 });
+
 // DELETE OBJAVA
 app.delete('/objava/:id', async (req, res) => {
   const token = req.headers.authorization?.split(' ')[1];
@@ -378,9 +391,10 @@ app.post('/dodaj-proizvod', async (req, res) => {
     res.status(500).json({ error: 'Greška pri dodavanju proizvoda' });
   }
 });
+
 // GET PROIZVODI
 app.get('/proizvodi', async (req, res) => {
-const { glavnaNisa, podnisa, userId } = req.query;
+  const { glavnaNisa, podnisa, userId } = req.query;
 
   try {
     let sql = `
@@ -397,13 +411,13 @@ const { glavnaNisa, podnisa, userId } = req.query;
       params.push(glavnaNisa);
     }
     if (podnisa) {
-   sql += ` AND LOWER(p.podnisa) = LOWER($${i++})`;
-   params.push(podnisa);
+      sql += ` AND LOWER(p.podnisa) = LOWER($${i++})`;
+      params.push(podnisa);
     }
     if (userId) {
-  sql += ` AND p."userId" = $${i++}`;
-  params.push(userId);
-}
+      sql += ` AND p."userId" = $${i++}`;
+      params.push(userId);
+    }
 
     sql += ` ORDER BY p.created_at DESC`;
 
@@ -435,6 +449,7 @@ app.delete('/proizvod/:id', async (req, res) => {
     res.status(500).json({ error: 'Greška pri brisanju' });
   }
 });
+
 // PRODAVCI ZA MAPU - sa geocodingom
 app.get('/prodavci-mapa', async (req, res) => {
   try {
@@ -447,36 +462,33 @@ app.get('/prodavci-mapa', async (req, res) => {
     for (const row of result.rows) {
       let koordinate = null;
 
-     // Geocoding - proba više varijanti
-try {
-  // Uzmi samo prvu reč/grad iz lokacije (npr. "Sabac selo Bela Reka" -> "Sabac")
-const lokacijaVarijante = [
-  row.lokacija,
-  row.lokacija.split(',')[0].trim(),
-  row.lokacija.split(' ').slice(0, 2).join(' '),
-  row.lokacija.split(' ').slice(0, 3).join(' '),
-  row.lokacija.split(' ')[0].trim() // ← dodaj ovo kao poslednji fallback
-];
+      try {
+        const lokacijaVarijante = [
+          row.lokacija,
+          row.lokacija.split(',')[0].trim(),
+          row.lokacija.split(' ').slice(0, 2).join(' '),
+          row.lokacija.split(' ').slice(0, 3).join(' '),
+          row.lokacija.split(' ')[0].trim()
+        ];
 
-  for (const varijanta of lokacijaVarijante) {
-    const geoResponse = await fetch(
-      `https://nominatim.openstreetmap.org/search?q=${encodeURIComponent(varijanta + ', Serbia')}&format=json&limit=1`,
-      { headers: { 'User-Agent': 'LokalniPlodovi/1.0' } }
-    );
-    const geoData = await geoResponse.json();
-    if (geoData.length > 0) {
-      koordinate = {
-        lat: parseFloat(geoData[0].lat),
-        lng: parseFloat(geoData[0].lon)
-      };
-      break; // Našao koordinate, prekini petlju
-    }
-    // Malo čekaj između zahteva
-    await new Promise(r => setTimeout(r, 500));
-  }
-} catch (e) {
-  console.log('Geocoding greška za:', row.lokacija);
-}
+        for (const varijanta of lokacijaVarijante) {
+          const geoResponse = await fetch(
+            `https://nominatim.openstreetmap.org/search?q=${encodeURIComponent(varijanta + ', Serbia')}&format=json&limit=1`,
+            { headers: { 'User-Agent': 'LokalniPlodovi/1.0' } }
+          );
+          const geoData = await geoResponse.json();
+          if (geoData.length > 0) {
+            koordinate = {
+              lat: parseFloat(geoData[0].lat),
+              lng: parseFloat(geoData[0].lon)
+            };
+            break;
+          }
+          await new Promise(r => setTimeout(r, 500));
+        }
+      } catch (e) {
+        console.log('Geocoding greška za:', row.lokacija);
+      }
 
       if (koordinate) {
         let niseParsed = [];
@@ -501,6 +513,7 @@ const lokacijaVarijante = [
     res.status(500).json({ error: 'Greška: ' + err.message });
   }
 });
+
 // ── ADMIN MIDDLEWARE ──
 function adminAuth(req, res, next) {
   const lozinka = req.headers['x-admin-password'];
@@ -590,6 +603,7 @@ app.delete('/admin/proizvod/:id', adminAuth, async (req, res) => {
     res.status(500).json({ error: err.message });
   }
 });
+
 // OBJAVE PO USERID
 app.get('/objave/:userId', async (req, res) => {
   try {
@@ -602,6 +616,120 @@ app.get('/objave/:userId', async (req, res) => {
     res.status(500).json({ error: err.message });
   }
 });
+
+// ── PORUKE ──
+
+// POŠALJI PORUKU
+app.post('/poruka', async (req, res) => {
+  const token = req.headers.authorization?.split(' ')[1];
+  if (!token) return res.status(401).json({ error: 'Niste ulogovani' });
+
+  try {
+    const decoded = jwt.verify(token, JWT_SECRET);
+    const { ka_user_id, tekst } = req.body;
+
+    if (!tekst || !ka_user_id) {
+      return res.status(400).json({ error: 'Nedostaju podaci' });
+    }
+
+    if (decoded.userId === parseInt(ka_user_id)) {
+      return res.status(400).json({ error: 'Ne možete pisati sebi' });
+    }
+
+    const result = await pool.query(
+      `INSERT INTO poruke (od_user_id, ka_user_id, tekst)
+       VALUES ($1, $2, $3) RETURNING id`,
+      [decoded.userId, ka_user_id, tekst.trim()]
+    );
+
+    res.json({ message: 'Poruka poslata!', id: result.rows[0].id });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// MOJ INBOX
+app.get('/inbox', async (req, res) => {
+  const token = req.headers.authorization?.split(' ')[1];
+  if (!token) return res.status(401).json({ error: 'Niste ulogovani' });
+
+  try {
+    const decoded = jwt.verify(token, JWT_SECRET);
+
+    const result = await pool.query(
+      `SELECT p.*, u.ime as "odIme", u.slika as "odSlika"
+       FROM poruke p
+       JOIN users u ON p.od_user_id = u.id
+       WHERE p.ka_user_id = $1
+       ORDER BY p.created_at DESC`,
+      [decoded.userId]
+    );
+
+    res.json(result.rows);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// BROJ NEPROCITANIH
+app.get('/inbox/broj', async (req, res) => {
+  const token = req.headers.authorization?.split(' ')[1];
+  if (!token) return res.status(401).json({ error: 'Niste ulogovani' });
+
+  try {
+    const decoded = jwt.verify(token, JWT_SECRET);
+
+    const result = await pool.query(
+      `SELECT COUNT(*) FROM poruke
+       WHERE ka_user_id = $1 AND procitano = FALSE`,
+      [decoded.userId]
+    );
+
+    res.json({ broj: parseInt(result.rows[0].count) });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// OZNACI KAO PROCITANO
+app.put('/poruka/:id/procitano', async (req, res) => {
+  const token = req.headers.authorization?.split(' ')[1];
+  if (!token) return res.status(401).json({ error: 'Niste ulogovani' });
+
+  try {
+    const decoded = jwt.verify(token, JWT_SECRET);
+
+    await pool.query(
+      `UPDATE poruke SET procitano = TRUE
+       WHERE id = $1 AND ka_user_id = $2`,
+      [req.params.id, decoded.userId]
+    );
+
+    res.json({ message: 'Označeno kao pročitano' });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// OBRISI PORUKU
+app.delete('/poruka/:id', async (req, res) => {
+  const token = req.headers.authorization?.split(' ')[1];
+  if (!token) return res.status(401).json({ error: 'Niste ulogovani' });
+
+  try {
+    const decoded = jwt.verify(token, JWT_SECRET);
+
+    await pool.query(
+      `DELETE FROM poruke WHERE id = $1 AND ka_user_id = $2`,
+      [req.params.id, decoded.userId]
+    );
+
+    res.json({ message: 'Poruka obrisana' });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
 const port = process.env.PORT || 3000;
 app.listen(port, () => {
   console.log(`Server startovan na portu ${port}`);

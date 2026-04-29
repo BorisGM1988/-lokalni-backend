@@ -16,7 +16,7 @@ app.use((req, res, next) => {
 });
 
 app.use(express.json({ limit: '10mb' }));
-// Normalizacija teksta
+
 function normalizeText(str) {
   if (!str) return '';
   return str
@@ -27,13 +27,12 @@ function normalizeText(str) {
     .replace(/ć/g, 'c')
     .replace(/ž/g, 'z');
 }
-// PostgreSQL konekcija
+
 const pool = new Pool({
   connectionString: process.env.DATABASE_URL,
   ssl: { rejectUnauthorized: false }
 });
 
-// Kreiranje tabela
 async function initDB() {
   try {
     await pool.query(`
@@ -48,14 +47,14 @@ async function initDB() {
         opis TEXT,
         slika TEXT,
         cover_slika TEXT,
+        tip TEXT DEFAULT 'prodavac',
         created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
       )
     `);
 
-    // Dodaj kolone ako ne postoje (za stare baze)
     await pool.query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS slika TEXT`);
     await pool.query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS cover_slika TEXT`);
-    
+    await pool.query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS tip TEXT DEFAULT 'prodavac'`);
 
     await pool.query(`
       CREATE TABLE IF NOT EXISTS proizvodi (
@@ -83,7 +82,6 @@ async function initDB() {
     `);
     await pool.query(`ALTER TABLE objave ADD COLUMN IF NOT EXISTS slika TEXT`);
 
-    // NOVO: Tabela za poruke
     await pool.query(`
       CREATE TABLE IF NOT EXISTS poruke (
         id SERIAL PRIMARY KEY,
@@ -92,6 +90,28 @@ async function initDB() {
         tekst TEXT NOT NULL,
         procitano BOOLEAN DEFAULT FALSE,
         created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+      )
+    `);
+
+    await pool.query(`
+      CREATE TABLE IF NOT EXISTS ocene (
+        id SERIAL PRIMARY KEY,
+        od_user_id INTEGER NOT NULL,
+        za_user_id INTEGER NOT NULL,
+        ocena INTEGER NOT NULL CHECK (ocena >= 1 AND ocena <= 5),
+        komentar TEXT,
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        UNIQUE(od_user_id, za_user_id)
+      )
+    `);
+
+    await pool.query(`
+      CREATE TABLE IF NOT EXISTS lista_zelja (
+        id SERIAL PRIMARY KEY,
+        user_id INTEGER NOT NULL,
+        proizvod_id INTEGER NOT NULL,
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        UNIQUE(user_id, proizvod_id)
       )
     `);
 
@@ -105,12 +125,11 @@ initDB();
 
 const JWT_SECRET = process.env.JWT_SECRET || 'promeni-ovo-u-dug-random-string-za-produkciju-2026';
 
-// TEST
 app.get('/test', (req, res) => {
   res.send('Backend radi! Trenutno vreme: ' + new Date().toISOString());
 });
 
-// REGISTRACIJA
+// REGISTRACIJA PRODAVCA
 app.post('/register', async (req, res) => {
   const { ime, email, lozinka, telefon, lokacija, nise, opis } = req.body;
 
@@ -122,19 +141,15 @@ app.post('/register', async (req, res) => {
     const hashedPassword = await bcrypt.hash(lozinka, 10);
 
     const result = await pool.query(
-      `INSERT INTO users (ime, email, password, telefon, lokacija, nise, opis)
-       VALUES ($1, $2, $3, $4, $5, $6, $7) RETURNING id`,
+      `INSERT INTO users (ime, email, password, telefon, lokacija, nise, opis, tip)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, 'prodavac') RETURNING id`,
       [ime, email, hashedPassword, telefon, lokacija, JSON.stringify(nise || []), opis || null]
     );
 
     const userId = result.rows[0].id;
-    const token = jwt.sign({ userId, email }, JWT_SECRET, { expiresIn: '30d' });
+    const token = jwt.sign({ userId, email, tip: 'prodavac' }, JWT_SECRET, { expiresIn: '30d' });
 
-    res.status(201).json({
-      message: 'Registracija uspešna',
-      token,
-      user: { id: userId, ime, email }
-    });
+    res.status(201).json({ message: 'Registracija uspešna', token, user: { id: userId, ime, email, tip: 'prodavac' } });
   } catch (err) {
     if (err.code === '23505') {
       return res.status(409).json({ error: 'Email već postoji' });
@@ -144,7 +159,37 @@ app.post('/register', async (req, res) => {
   }
 });
 
-// LOGIN
+// REGISTRACIJA KUPCA
+app.post('/register-kupac', async (req, res) => {
+  const { ime, email, lozinka, telefon, lokacija } = req.body;
+
+  if (!ime || !email || !lozinka) {
+    return res.status(400).json({ error: 'Ime, email i lozinka su obavezni' });
+  }
+
+  try {
+    const hashedPassword = await bcrypt.hash(lozinka, 10);
+
+    const result = await pool.query(
+      `INSERT INTO users (ime, email, password, telefon, lokacija, nise, opis, tip)
+       VALUES ($1, $2, $3, $4, $5, '[]', null, 'kupac') RETURNING id`,
+      [ime, email, hashedPassword, telefon || null, lokacija || null]
+    );
+
+    const userId = result.rows[0].id;
+    const token = jwt.sign({ userId, email, tip: 'kupac' }, JWT_SECRET, { expiresIn: '30d' });
+
+    res.status(201).json({ message: 'Registracija kupca uspešna', token, user: { id: userId, ime, email, tip: 'kupac' } });
+  } catch (err) {
+    if (err.code === '23505') {
+      return res.status(409).json({ error: 'Email već postoji' });
+    }
+    console.error(err);
+    res.status(500).json({ error: 'Greška na serveru' });
+  }
+});
+
+// LOGIN (isti za oba tipa)
 app.post('/login', async (req, res) => {
   const { email, lozinka } = req.body;
 
@@ -159,7 +204,8 @@ app.post('/login', async (req, res) => {
     const isMatch = await bcrypt.compare(lozinka, user.password);
     if (!isMatch) return res.status(401).json({ error: 'Pogrešan email ili lozinka' });
 
-    const token = jwt.sign({ userId: user.id, email }, JWT_SECRET, { expiresIn: '30d' });
+    const tip = user.tip || 'prodavac';
+    const token = jwt.sign({ userId: user.id, email, tip }, JWT_SECRET, { expiresIn: '30d' });
 
     res.json({
       message: 'Prijava uspešna',
@@ -171,7 +217,8 @@ app.post('/login', async (req, res) => {
         telefon: user.telefon,
         lokacija: user.lokacija,
         opis: user.opis,
-        nise: user.nise ? JSON.parse(user.nise) : []
+        nise: user.nise ? JSON.parse(user.nise) : [],
+        tip
       }
     });
   } catch (err) {
@@ -193,7 +240,7 @@ app.get('/profile', async (req, res) => {
   try {
     if (userId) {
       const result = await pool.query(
-        `SELECT id, ime, email, telefon, lokacija, opis, nise, slika, cover_slika, created_at as "registeredAt"
+        `SELECT id, ime, email, telefon, lokacija, opis, nise, slika, cover_slika, tip, created_at as "registeredAt"
          FROM users WHERE id = $1`,
         [userId]
       );
@@ -209,6 +256,7 @@ app.get('/profile', async (req, res) => {
         nise: user.nise ? JSON.parse(user.nise) : [],
         slika: user.slika || '',
         coverSlika: user.cover_slika || '',
+        tip: user.tip || 'prodavac',
         registeredAt: user.registeredAt
       });
     }
@@ -229,7 +277,8 @@ app.get('/profile', async (req, res) => {
       opis: user.opis || '',
       nise: user.nise ? JSON.parse(user.nise) : [],
       slika: user.slika || '',
-      coverSlika: user.cover_slika || ''
+      coverSlika: user.cover_slika || '',
+      tip: user.tip || 'prodavac'
     });
   } catch (err) {
     console.error(err);
@@ -237,7 +286,7 @@ app.get('/profile', async (req, res) => {
   }
 });
 
-// UPDATE PROFILA (ime, opis, telefon, lokacija, slike)
+// UPDATE PROFILA
 app.post('/profile/update', async (req, res) => {
   const token = req.headers.authorization?.split(' ')[1];
   if (!token) return res.status(401).json({ error: 'Niste ulogovani' });
@@ -262,11 +311,7 @@ app.post('/profile/update', async (req, res) => {
     }
 
     vrednosti.push(decoded.userId);
-
-    await pool.query(
-      `UPDATE users SET ${polja.join(', ')} WHERE id = $${i}`,
-      vrednosti
-    );
+    await pool.query(`UPDATE users SET ${polja.join(', ')} WHERE id = $${i}`, vrednosti);
 
     res.json({ message: 'Profil uspešno izmenjen!' });
   } catch (err) {
@@ -286,10 +331,10 @@ app.post('/objavi-novost', async (req, res) => {
 
     if (!tekst || tekst.trim() === '') return res.status(400).json({ error: 'Tekst objave ne može biti prazan' });
 
-   const result = await pool.query(
-  `INSERT INTO objave ("userId", tekst, slika) VALUES ($1, $2, $3) RETURNING id`,
-  [decoded.userId, tekst.trim(), slikaBase64 || null]
-   );
+    const result = await pool.query(
+      `INSERT INTO objave ("userId", tekst, slika) VALUES ($1, $2, $3) RETURNING id`,
+      [decoded.userId, tekst.trim(), slikaBase64 || null]
+    );
 
     res.json({ message: 'Objava uspešno dodata!', objavaId: result.rows[0].id });
   } catch (err) {
@@ -340,7 +385,7 @@ app.delete('/objava/:id', async (req, res) => {
 app.get('/svi-prodavci', async (req, res) => {
   try {
     const result = await pool.query(
-      `SELECT id, ime, opis, slika, lokacija, nise FROM users ORDER BY ime ASC`
+      `SELECT id, ime, opis, slika, lokacija, nise FROM users WHERE tip = 'prodavac' OR tip IS NULL ORDER BY ime ASC`
     );
 
     const prodavci = result.rows.map(row => {
@@ -379,13 +424,10 @@ app.post('/dodaj-proizvod', async (req, res) => {
     const result = await pool.query(
       `INSERT INTO proizvodi ("userId", naziv, opis, cena, kolicina, "glavnaNisa", podnisa, slika)
        VALUES ($1, $2, $3, $4, $5, $6, $7, $8) RETURNING id`,
-     [decoded.userId, naziv, opis || null, cena, kolicina, glavnaNisa, podnisa || null, slikaBase64 || null]
+      [decoded.userId, naziv, opis || null, cena, kolicina, glavnaNisa, podnisa || null, slikaBase64 || null]
     );
 
-    res.status(201).json({
-      message: 'Proizvod uspešno izložen na pijac!',
-      proizvodId: result.rows[0].id
-    });
+    res.status(201).json({ message: 'Proizvod uspešno izložen na pijac!', proizvodId: result.rows[0].id });
   } catch (err) {
     console.error(err);
     res.status(500).json({ error: 'Greška pri dodavanju proizvoda' });
@@ -406,18 +448,9 @@ app.get('/proizvodi', async (req, res) => {
     const params = [];
     let i = 1;
 
-    if (glavnaNisa) {
-      sql += ` AND p."glavnaNisa" = $${i++}`;
-      params.push(glavnaNisa);
-    }
-    if (podnisa) {
-      sql += ` AND LOWER(p.podnisa) = LOWER($${i++})`;
-      params.push(podnisa);
-    }
-    if (userId) {
-      sql += ` AND p."userId" = $${i++}`;
-      params.push(userId);
-    }
+    if (glavnaNisa) { sql += ` AND p."glavnaNisa" = $${i++}`; params.push(glavnaNisa); }
+    if (podnisa)    { sql += ` AND LOWER(p.podnisa) = LOWER($${i++})`; params.push(podnisa); }
+    if (userId)     { sql += ` AND p."userId" = $${i++}`; params.push(userId); }
 
     sql += ` ORDER BY p.created_at DESC`;
 
@@ -450,11 +483,11 @@ app.delete('/proizvod/:id', async (req, res) => {
   }
 });
 
-// PRODAVCI ZA MAPU - sa geocodingom
+// PRODAVCI ZA MAPU
 app.get('/prodavci-mapa', async (req, res) => {
   try {
     const result = await pool.query(
-      `SELECT id, ime, opis, slika, lokacija, nise FROM users ORDER BY ime ASC`
+      `SELECT id, ime, opis, slika, lokacija, nise FROM users WHERE tip = 'prodavac' OR tip IS NULL ORDER BY ime ASC`
     );
 
     const prodavci = [];
@@ -478,10 +511,7 @@ app.get('/prodavci-mapa', async (req, res) => {
           );
           const geoData = await geoResponse.json();
           if (geoData.length > 0) {
-            koordinate = {
-              lat: parseFloat(geoData[0].lat),
-              lng: parseFloat(geoData[0].lon)
-            };
+            koordinate = { lat: parseFloat(geoData[0].lat), lng: parseFloat(geoData[0].lon) };
             break;
           }
           await new Promise(r => setTimeout(r, 500));
@@ -523,28 +553,27 @@ function adminAuth(req, res, next) {
   next();
 }
 
-// ── ADMIN STATISTIKE ──
 app.get('/admin/stats', adminAuth, async (req, res) => {
   try {
     const korisnici = await pool.query('SELECT COUNT(*) FROM users');
     const proizvodi = await pool.query('SELECT COUNT(*) FROM proizvodi');
     const objave = await pool.query('SELECT COUNT(*) FROM objave');
+    const kupci = await pool.query("SELECT COUNT(*) FROM users WHERE tip = 'kupac'");
     res.json({
       korisnici: parseInt(korisnici.rows[0].count),
       proizvodi: parseInt(proizvodi.rows[0].count),
-      objave: parseInt(objave.rows[0].count)
+      objave: parseInt(objave.rows[0].count),
+      kupci: parseInt(kupci.rows[0].count)
     });
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
 });
 
-// ── ADMIN SVI KORISNICI ──
 app.get('/admin/korisnici', adminAuth, async (req, res) => {
   try {
     const result = await pool.query(
-      `SELECT id, ime, email, telefon, lokacija, nise, created_at 
-       FROM users ORDER BY created_at DESC`
+      `SELECT id, ime, email, telefon, lokacija, nise, tip, created_at FROM users ORDER BY created_at DESC`
     );
     res.json(result.rows);
   } catch (err) {
@@ -552,14 +581,11 @@ app.get('/admin/korisnici', adminAuth, async (req, res) => {
   }
 });
 
-// ── ADMIN SVI PROIZVODI ──
 app.get('/admin/proizvodi', adminAuth, async (req, res) => {
   try {
     const result = await pool.query(
       `SELECT p.*, u.ime as "prodavacIme", u.email as "prodavacEmail"
-       FROM proizvodi p
-       JOIN users u ON p."userId" = u.id
-       ORDER BY p.created_at DESC`
+       FROM proizvodi p JOIN users u ON p."userId" = u.id ORDER BY p.created_at DESC`
     );
     res.json(result.rows);
   } catch (err) {
@@ -567,14 +593,11 @@ app.get('/admin/proizvodi', adminAuth, async (req, res) => {
   }
 });
 
-// ── ADMIN SVE OBJAVE ──
 app.get('/admin/objave', adminAuth, async (req, res) => {
   try {
     const result = await pool.query(
       `SELECT o.*, u.ime as "korisnikIme", u.email as "korisnikEmail"
-       FROM objave o
-       JOIN users u ON o."userId" = u.id
-       ORDER BY o.created_at DESC`
+       FROM objave o JOIN users u ON o."userId" = u.id ORDER BY o.created_at DESC`
     );
     res.json(result.rows);
   } catch (err) {
@@ -582,11 +605,13 @@ app.get('/admin/objave', adminAuth, async (req, res) => {
   }
 });
 
-// ── ADMIN OBRISI KORISNIKA ──
 app.delete('/admin/korisnik/:id', adminAuth, async (req, res) => {
   try {
     await pool.query('DELETE FROM proizvodi WHERE "userId" = $1', [req.params.id]);
     await pool.query('DELETE FROM objave WHERE "userId" = $1', [req.params.id]);
+    await pool.query('DELETE FROM poruke WHERE od_user_id = $1 OR ka_user_id = $1', [req.params.id]);
+    await pool.query('DELETE FROM ocene WHERE od_user_id = $1 OR za_user_id = $1', [req.params.id]);
+    await pool.query('DELETE FROM lista_zelja WHERE user_id = $1', [req.params.id]);
     await pool.query('DELETE FROM users WHERE id = $1', [req.params.id]);
     res.json({ message: 'Korisnik obrisan' });
   } catch (err) {
@@ -594,9 +619,9 @@ app.delete('/admin/korisnik/:id', adminAuth, async (req, res) => {
   }
 });
 
-// ── ADMIN OBRISI PROIZVOD ──
 app.delete('/admin/proizvod/:id', adminAuth, async (req, res) => {
   try {
+    await pool.query('DELETE FROM lista_zelja WHERE proizvod_id = $1', [req.params.id]);
     await pool.query('DELETE FROM proizvodi WHERE id = $1', [req.params.id]);
     res.json({ message: 'Proizvod obrisan' });
   } catch (err) {
@@ -618,8 +643,6 @@ app.get('/objave/:userId', async (req, res) => {
 });
 
 // ── PORUKE ──
-
-// POŠALJI PORUKU
 app.post('/poruka', async (req, res) => {
   const token = req.headers.authorization?.split(' ')[1];
   if (!token) return res.status(401).json({ error: 'Niste ulogovani' });
@@ -628,17 +651,11 @@ app.post('/poruka', async (req, res) => {
     const decoded = jwt.verify(token, JWT_SECRET);
     const { ka_user_id, tekst } = req.body;
 
-    if (!tekst || !ka_user_id) {
-      return res.status(400).json({ error: 'Nedostaju podaci' });
-    }
-
-    if (decoded.userId === parseInt(ka_user_id)) {
-      return res.status(400).json({ error: 'Ne možete pisati sebi' });
-    }
+    if (!tekst || !ka_user_id) return res.status(400).json({ error: 'Nedostaju podaci' });
+    if (decoded.userId === parseInt(ka_user_id)) return res.status(400).json({ error: 'Ne možete pisati sebi' });
 
     const result = await pool.query(
-      `INSERT INTO poruke (od_user_id, ka_user_id, tekst)
-       VALUES ($1, $2, $3) RETURNING id`,
+      `INSERT INTO poruke (od_user_id, ka_user_id, tekst) VALUES ($1, $2, $3) RETURNING id`,
       [decoded.userId, ka_user_id, tekst.trim()]
     );
 
@@ -648,83 +665,197 @@ app.post('/poruka', async (req, res) => {
   }
 });
 
-// MOJ INBOX
 app.get('/inbox', async (req, res) => {
   const token = req.headers.authorization?.split(' ')[1];
   if (!token) return res.status(401).json({ error: 'Niste ulogovani' });
 
   try {
     const decoded = jwt.verify(token, JWT_SECRET);
-
     const result = await pool.query(
       `SELECT p.*, u.ime as "odIme", u.slika as "odSlika"
-       FROM poruke p
-       JOIN users u ON p.od_user_id = u.id
-       WHERE p.ka_user_id = $1
-       ORDER BY p.created_at DESC`,
+       FROM poruke p JOIN users u ON p.od_user_id = u.id
+       WHERE p.ka_user_id = $1 ORDER BY p.created_at DESC`,
       [decoded.userId]
     );
-
     res.json(result.rows);
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
 });
 
-// BROJ NEPROCITANIH
 app.get('/inbox/broj', async (req, res) => {
   const token = req.headers.authorization?.split(' ')[1];
   if (!token) return res.status(401).json({ error: 'Niste ulogovani' });
 
   try {
     const decoded = jwt.verify(token, JWT_SECRET);
-
     const result = await pool.query(
-      `SELECT COUNT(*) FROM poruke
-       WHERE ka_user_id = $1 AND procitano = FALSE`,
+      `SELECT COUNT(*) FROM poruke WHERE ka_user_id = $1 AND procitano = FALSE`,
       [decoded.userId]
     );
-
     res.json({ broj: parseInt(result.rows[0].count) });
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
 });
 
-// OZNACI KAO PROCITANO
 app.put('/poruka/:id/procitano', async (req, res) => {
   const token = req.headers.authorization?.split(' ')[1];
   if (!token) return res.status(401).json({ error: 'Niste ulogovani' });
 
   try {
     const decoded = jwt.verify(token, JWT_SECRET);
-
     await pool.query(
-      `UPDATE poruke SET procitano = TRUE
-       WHERE id = $1 AND ka_user_id = $2`,
+      `UPDATE poruke SET procitano = TRUE WHERE id = $1 AND ka_user_id = $2`,
       [req.params.id, decoded.userId]
     );
-
     res.json({ message: 'Označeno kao pročitano' });
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
 });
 
-// OBRISI PORUKU
 app.delete('/poruka/:id', async (req, res) => {
   const token = req.headers.authorization?.split(' ')[1];
   if (!token) return res.status(401).json({ error: 'Niste ulogovani' });
 
   try {
     const decoded = jwt.verify(token, JWT_SECRET);
-
     await pool.query(
       `DELETE FROM poruke WHERE id = $1 AND ka_user_id = $2`,
       [req.params.id, decoded.userId]
     );
-
     res.json({ message: 'Poruka obrisana' });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// ── OCENE ──
+
+// Dodaj ili izmeni ocenu
+app.post('/ocena', async (req, res) => {
+  const token = req.headers.authorization?.split(' ')[1];
+  if (!token) return res.status(401).json({ error: 'Niste ulogovani' });
+
+  try {
+    const decoded = jwt.verify(token, JWT_SECRET);
+    const { za_user_id, ocena, komentar } = req.body;
+
+    if (!za_user_id || !ocena) return res.status(400).json({ error: 'Nedostaju podaci' });
+    if (ocena < 1 || ocena > 5) return res.status(400).json({ error: 'Ocena mora biti između 1 i 5' });
+    if (decoded.userId === parseInt(za_user_id)) return res.status(400).json({ error: 'Ne možete oceniti sebe' });
+
+    // INSERT ili UPDATE ako već postoji ocena
+    await pool.query(
+      `INSERT INTO ocene (od_user_id, za_user_id, ocena, komentar)
+       VALUES ($1, $2, $3, $4)
+       ON CONFLICT (od_user_id, za_user_id)
+       DO UPDATE SET ocena = $3, komentar = $4, created_at = CURRENT_TIMESTAMP`,
+      [decoded.userId, za_user_id, ocena, komentar || null]
+    );
+
+    res.json({ message: 'Ocena uspešno dodata!' });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Dobavi ocene za prodavca
+app.get('/ocene/:userId', async (req, res) => {
+  try {
+    const result = await pool.query(
+      `SELECT o.*, u.ime as "odIme", u.slika as "odSlika"
+       FROM ocene o JOIN users u ON o.od_user_id = u.id
+       WHERE o.za_user_id = $1 ORDER BY o.created_at DESC`,
+      [req.params.userId]
+    );
+
+    const prosek = result.rows.length > 0
+      ? (result.rows.reduce((sum, r) => sum + r.ocena, 0) / result.rows.length).toFixed(1)
+      : null;
+
+    res.json({ ocene: result.rows, prosek, ukupno: result.rows.length });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Moja ocena za određenog prodavca
+app.get('/moja-ocena/:za_user_id', async (req, res) => {
+  const token = req.headers.authorization?.split(' ')[1];
+  if (!token) return res.status(401).json({ error: 'Niste ulogovani' });
+
+  try {
+    const decoded = jwt.verify(token, JWT_SECRET);
+    const result = await pool.query(
+      `SELECT * FROM ocene WHERE od_user_id = $1 AND za_user_id = $2`,
+      [decoded.userId, req.params.za_user_id]
+    );
+    res.json(result.rows[0] || null);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// ── LISTA ŽELJA ──
+
+// Dodaj u listu želja
+app.post('/lista-zelja', async (req, res) => {
+  const token = req.headers.authorization?.split(' ')[1];
+  if (!token) return res.status(401).json({ error: 'Niste ulogovani' });
+
+  try {
+    const decoded = jwt.verify(token, JWT_SECRET);
+    const { proizvod_id } = req.body;
+
+    if (!proizvod_id) return res.status(400).json({ error: 'Nedostaje proizvod_id' });
+
+    await pool.query(
+      `INSERT INTO lista_zelja (user_id, proizvod_id) VALUES ($1, $2) ON CONFLICT DO NOTHING`,
+      [decoded.userId, proizvod_id]
+    );
+
+    res.json({ message: 'Dodato u listu želja!' });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Ukloni iz liste želja
+app.delete('/lista-zelja/:proizvod_id', async (req, res) => {
+  const token = req.headers.authorization?.split(' ')[1];
+  if (!token) return res.status(401).json({ error: 'Niste ulogovani' });
+
+  try {
+    const decoded = jwt.verify(token, JWT_SECRET);
+    await pool.query(
+      `DELETE FROM lista_zelja WHERE user_id = $1 AND proizvod_id = $2`,
+      [decoded.userId, req.params.proizvod_id]
+    );
+    res.json({ message: 'Uklonjeno iz liste želja' });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Moja lista želja
+app.get('/lista-zelja', async (req, res) => {
+  const token = req.headers.authorization?.split(' ')[1];
+  if (!token) return res.status(401).json({ error: 'Niste ulogovani' });
+
+  try {
+    const decoded = jwt.verify(token, JWT_SECRET);
+    const result = await pool.query(
+      `SELECT p.*, u.ime as "prodavacIme", lz.created_at as "dodato"
+       FROM lista_zelja lz
+       JOIN proizvodi p ON lz.proizvod_id = p.id
+       JOIN users u ON p."userId" = u.id
+       WHERE lz.user_id = $1
+       ORDER BY lz.created_at DESC`,
+      [decoded.userId]
+    );
+    res.json(result.rows);
   } catch (err) {
     res.status(500).json({ error: err.message });
   }

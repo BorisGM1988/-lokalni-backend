@@ -2,8 +2,16 @@ const express = require('express');
 const { Pool } = require('pg');
 const bcrypt = require('bcryptjs');
 const jwt = require('jsonwebtoken');
+const cloudinary = require('cloudinary').v2;
 
 const app = express();
+
+// CLOUDINARY CONFIG
+cloudinary.config({
+  cloud_name: process.env.CLOUDINARY_CLOUD_NAME,
+  api_key: process.env.CLOUDINARY_API_KEY,
+  api_secret: process.env.CLOUDINARY_API_SECRET
+});
 
 // RUČNI CORS
 app.use((req, res, next) => {
@@ -15,7 +23,7 @@ app.use((req, res, next) => {
   next();
 });
 
-app.use(express.json({ limit: '10mb' }));
+app.use(express.json({ limit: '50mb' }));
 
 function normalizeText(str) {
   if (!str) return '';
@@ -81,6 +89,7 @@ async function initDB() {
       )
     `);
     await pool.query(`ALTER TABLE objave ADD COLUMN IF NOT EXISTS slika TEXT`);
+    await pool.query(`ALTER TABLE objave ADD COLUMN IF NOT EXISTS video TEXT`);
 
     await pool.query(`
       CREATE TABLE IF NOT EXISTS poruke (
@@ -320,6 +329,34 @@ app.post('/profile/update', async (req, res) => {
   }
 });
 
+// UPLOAD VIDEO NA CLOUDINARY
+app.post('/upload-video', async (req, res) => {
+  const token = req.headers.authorization?.split(' ')[1];
+  if (!token) return res.status(401).json({ error: 'Niste ulogovani' });
+
+  try {
+    jwt.verify(token, JWT_SECRET);
+
+    const { videoBase64 } = req.body;
+    if (!videoBase64) return res.status(400).json({ error: 'Nema video fajla' });
+
+    const result = await cloudinary.uploader.upload(videoBase64, {
+      resource_type: 'video',
+      folder: 'lokalni-plodovi',
+      transformation: [
+        { duration: '30' },
+        { quality: 'auto:low' },
+        { width: 720, crop: 'limit' }
+      ]
+    });
+
+    res.json({ url: result.secure_url });
+  } catch (err) {
+    console.error('Cloudinary greška:', err);
+    res.status(500).json({ error: 'Greška pri uploadu videa' });
+  }
+});
+
 // OBJAVI NOVOST
 app.post('/objavi-novost', async (req, res) => {
   const token = req.headers.authorization?.split(' ')[1];
@@ -327,13 +364,13 @@ app.post('/objavi-novost', async (req, res) => {
 
   try {
     const decoded = jwt.verify(token, JWT_SECRET);
-    const { tekst, slikaBase64 } = req.body;
+    const { tekst, slikaBase64, videoUrl } = req.body;
 
     if (!tekst || tekst.trim() === '') return res.status(400).json({ error: 'Tekst objave ne može biti prazan' });
 
     const result = await pool.query(
-      `INSERT INTO objave ("userId", tekst, slika) VALUES ($1, $2, $3) RETURNING id`,
-      [decoded.userId, tekst.trim(), slikaBase64 || null]
+      `INSERT INTO objave ("userId", tekst, slika, video) VALUES ($1, $2, $3, $4) RETURNING id`,
+      [decoded.userId, tekst.trim(), slikaBase64 || null, videoUrl || null]
     );
 
     res.json({ message: 'Objava uspešno dodata!', objavaId: result.rows[0].id });
@@ -351,7 +388,7 @@ app.get('/moje-objave', async (req, res) => {
   try {
     const decoded = jwt.verify(token, JWT_SECRET);
     const result = await pool.query(
-      `SELECT id, tekst, slika, created_at FROM objave WHERE "userId" = $1 ORDER BY created_at DESC`,
+      `SELECT id, tekst, slika, video, created_at FROM objave WHERE "userId" = $1 ORDER BY created_at DESC`,
       [decoded.userId]
     );
     res.json(result.rows);
@@ -633,7 +670,7 @@ app.delete('/admin/proizvod/:id', adminAuth, async (req, res) => {
 app.get('/objave/:userId', async (req, res) => {
   try {
     const result = await pool.query(
-      `SELECT id, tekst, slika, created_at FROM objave WHERE "userId" = $1 ORDER BY created_at DESC`,
+      `SELECT id, tekst, slika, video, created_at FROM objave WHERE "userId" = $1 ORDER BY created_at DESC`,
       [req.params.userId]
     );
     res.json(result.rows);
@@ -732,8 +769,6 @@ app.delete('/poruka/:id', async (req, res) => {
 });
 
 // ── OCENE ──
-
-// Dodaj ili izmeni ocenu
 app.post('/ocena', async (req, res) => {
   const token = req.headers.authorization?.split(' ')[1];
   if (!token) return res.status(401).json({ error: 'Niste ulogovani' });
@@ -746,7 +781,6 @@ app.post('/ocena', async (req, res) => {
     if (ocena < 1 || ocena > 5) return res.status(400).json({ error: 'Ocena mora biti između 1 i 5' });
     if (decoded.userId === parseInt(za_user_id)) return res.status(400).json({ error: 'Ne možete oceniti sebe' });
 
-    // INSERT ili UPDATE ako već postoji ocena
     await pool.query(
       `INSERT INTO ocene (od_user_id, za_user_id, ocena, komentar)
        VALUES ($1, $2, $3, $4)
@@ -761,7 +795,6 @@ app.post('/ocena', async (req, res) => {
   }
 });
 
-// Dobavi ocene za prodavca
 app.get('/ocene/:userId', async (req, res) => {
   try {
     const result = await pool.query(
@@ -781,7 +814,6 @@ app.get('/ocene/:userId', async (req, res) => {
   }
 });
 
-// Moja ocena za određenog prodavca
 app.get('/moja-ocena/:za_user_id', async (req, res) => {
   const token = req.headers.authorization?.split(' ')[1];
   if (!token) return res.status(401).json({ error: 'Niste ulogovani' });
@@ -799,8 +831,6 @@ app.get('/moja-ocena/:za_user_id', async (req, res) => {
 });
 
 // ── LISTA ŽELJA ──
-
-// Dodaj u listu želja
 app.post('/lista-zelja', async (req, res) => {
   const token = req.headers.authorization?.split(' ')[1];
   if (!token) return res.status(401).json({ error: 'Niste ulogovani' });
@@ -822,7 +852,6 @@ app.post('/lista-zelja', async (req, res) => {
   }
 });
 
-// Ukloni iz liste želja
 app.delete('/lista-zelja/:proizvod_id', async (req, res) => {
   const token = req.headers.authorization?.split(' ')[1];
   if (!token) return res.status(401).json({ error: 'Niste ulogovani' });
@@ -839,7 +868,6 @@ app.delete('/lista-zelja/:proizvod_id', async (req, res) => {
   }
 });
 
-// Moja lista želja
 app.get('/lista-zelja', async (req, res) => {
   const token = req.headers.authorization?.split(' ')[1];
   if (!token) return res.status(401).json({ error: 'Niste ulogovani' });

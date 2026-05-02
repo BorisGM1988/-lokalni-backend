@@ -344,7 +344,7 @@ app.post('/upload-video', async (req, res) => {
       resource_type: 'video',
       folder: 'lokalni-plodovi',
       transformation: [
-        { duration: '30' },
+        { duration: '60' },
         { quality: 'auto:low' },
         { width: 720, crop: 'limit' }
       ]

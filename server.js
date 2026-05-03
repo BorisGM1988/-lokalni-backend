@@ -344,7 +344,7 @@ app.post('/upload-video', async (req, res) => {
       resource_type: 'video',
       folder: 'lokalni-plodovi',
       transformation: [
-        { duration: '60' },
+        { duration: '30' },
         { quality: 'auto:low' },
         { width: 720, crop: 'limit' }
       ]
@@ -496,6 +496,36 @@ app.get('/proizvodi', async (req, res) => {
   } catch (err) {
     console.error(err);
     res.status(500).json({ error: 'Greška pri učitavanju proizvoda' });
+  }
+});
+
+// UPDATE PROIZVOD
+app.put('/proizvod/:id', async (req, res) => {
+  const token = req.headers.authorization?.split(' ')[1];
+  if (!token) return res.status(401).json({ error: 'Niste ulogovani' });
+
+  try {
+    const decoded = jwt.verify(token, JWT_SECRET);
+    const proizvodId = req.params.id;
+    const { naziv, cena, kolicina, opis } = req.body;
+
+    if (!naziv || !cena || !kolicina) {
+      return res.status(400).json({ error: 'Obavezna polja nisu popunjena' });
+    }
+
+    const check = await pool.query('SELECT "userId" FROM proizvodi WHERE id = $1', [proizvodId]);
+    if (!check.rows[0]) return res.status(404).json({ error: 'Proizvod nije pronađen' });
+    if (check.rows[0].userId !== decoded.userId) return res.status(403).json({ error: 'Nemate dozvolu' });
+
+    await pool.query(
+      `UPDATE proizvodi SET naziv=$1, cena=$2, kolicina=$3, opis=$4 WHERE id=$5`,
+      [naziv, cena, kolicina, opis || null, proizvodId]
+    );
+
+    res.json({ message: 'Proizvod uspešno izmenjen!' });
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: 'Greška pri izmeni proizvoda' });
   }
 });
 

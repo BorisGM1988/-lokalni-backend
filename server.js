@@ -124,6 +124,9 @@ async function initDB() {
       )
     `);
 
+    await pool.query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS lat NUMERIC`);
+    await pool.query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS lng NUMERIC`);
+
     console.log('Baza inicijalizovana uspešno!');
   } catch (err) {
     console.error('Greška pri inicijalizaciji baze:', err.message);
@@ -550,47 +553,22 @@ app.delete('/proizvod/:id', async (req, res) => {
   }
 });
 
-// PRODAVCI ZA MAPU
+// PRODAVCI ZA MAPU — sa kešovanjem koordinata u bazi
 app.get('/prodavci-mapa', async (req, res) => {
   try {
     const result = await pool.query(
-      `SELECT id, ime, opis, slika, lokacija, nise FROM users WHERE tip = 'prodavac' OR tip IS NULL ORDER BY ime ASC`
+      `SELECT id, ime, opis, slika, lokacija, nise, lat, lng
+       FROM users WHERE tip = 'prodavac' OR tip IS NULL ORDER BY ime ASC`
     );
 
     const prodavci = [];
 
     for (const row of result.rows) {
-      let koordinate = null;
+      let niseParsed = [];
+      try { niseParsed = row.nise ? JSON.parse(row.nise) : []; } catch (e) {}
 
-      try {
-        const lokacijaVarijante = [
-          row.lokacija,
-          row.lokacija.split(',')[0].trim(),
-          row.lokacija.split(' ').slice(0, 2).join(' '),
-          row.lokacija.split(' ').slice(0, 3).join(' '),
-          row.lokacija.split(' ')[0].trim()
-        ];
-
-        for (const varijanta of lokacijaVarijante) {
-          const geoResponse = await fetch(
-            `https://nominatim.openstreetmap.org/search?q=${encodeURIComponent(varijanta + ', Serbia')}&format=json&limit=1`,
-            { headers: { 'User-Agent': 'LokalniPlodovi/1.0' } }
-          );
-          const geoData = await geoResponse.json();
-          if (geoData.length > 0) {
-            koordinate = { lat: parseFloat(geoData[0].lat), lng: parseFloat(geoData[0].lon) };
-            break;
-          }
-          await new Promise(r => setTimeout(r, 500));
-        }
-      } catch (e) {
-        console.log('Geocoding greška za:', row.lokacija);
-      }
-
-      if (koordinate) {
-        let niseParsed = [];
-        try { niseParsed = row.nise ? JSON.parse(row.nise) : []; } catch (e) {}
-
+      // Ako već ima koordinate u bazi — koristi ih direktno, nema Nominatim zahteva
+      if (row.lat && row.lng) {
         prodavci.push({
           id: row.id,
           ime: row.ime || 'Bez imena',
@@ -598,9 +576,56 @@ app.get('/prodavci-mapa', async (req, res) => {
           slika: row.slika || '',
           lokacija: row.lokacija || '',
           nise: niseParsed,
-          lat: koordinate.lat,
-          lng: koordinate.lng
+          lat: parseFloat(row.lat),
+          lng: parseFloat(row.lng)
         });
+        continue;
+      }
+
+      // Ako nema koordinata — geokodira i čuva u bazu
+      if (!row.lokacija) continue;
+
+      try {
+        const varijante = [
+          row.lokacija,
+          row.lokacija.split(',')[0].trim(),
+          row.lokacija.split(' ').slice(0, 3).join(' '),
+          row.lokacija.split(' ')[0].trim()
+        ];
+
+        let koordinate = null;
+        for (const v of varijante) {
+          await new Promise(r => setTimeout(r, 1100)); // 1 req/sec Nominatim limit
+          const geoResponse = await fetch(
+            `https://nominatim.openstreetmap.org/search?q=${encodeURIComponent(v + ', Serbia')}&format=json&limit=1`,
+            { headers: { 'User-Agent': 'LokalniPlodovi/1.0' } }
+          );
+          const geoData = await geoResponse.json();
+          if (geoData.length > 0) {
+            koordinate = { lat: parseFloat(geoData[0].lat), lng: parseFloat(geoData[0].lon) };
+            break;
+          }
+        }
+
+        if (koordinate) {
+          // Sačuvaj u bazu — sledeći put nema geocodinga
+          await pool.query(
+            `UPDATE users SET lat = $1, lng = $2 WHERE id = $3`,
+            [koordinate.lat, koordinate.lng, row.id]
+          );
+          prodavci.push({
+            id: row.id,
+            ime: row.ime || 'Bez imena',
+            opis: row.opis || 'Domaći proizvodi',
+            slika: row.slika || '',
+            lokacija: row.lokacija || '',
+            nise: niseParsed,
+            lat: koordinate.lat,
+            lng: koordinate.lng
+          });
+        }
+      } catch (e) {
+        console.log('Geocoding greška za:', row.lokacija);
       }
     }
 

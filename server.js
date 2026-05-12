@@ -962,12 +962,6 @@ app.post('/admin/set-koordinate/:id', adminAuth, async (req, res) => {
   }
 });
 
-// OVE DVE LINIJE SU VEĆ NA KRAJU - OSTAVI IH POSLEDNJE:
-const port = process.env.PORT || 3000;
-app.listen(port, () => {
-  console.log(`Server startovan na portu ${port}`);
-});
-
 const port = process.env.PORT || 3000;
 app.listen(port, () => {
   console.log(`Server startovan na portu ${port}`);

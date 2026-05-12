@@ -943,6 +943,30 @@ app.get('/lista-zelja', async (req, res) => {
     res.status(500).json({ error: err.message });
   }
 });
+// ... postojeći kod ...
+
+// ── LISTA ŽELJA ── (već postoji)
+// ... 
+
+// NOVO - DODAJ OVDE:
+app.post('/admin/set-koordinate/:id', adminAuth, async (req, res) => {
+  const { lat, lng } = req.body;
+  try {
+    await pool.query(
+      `UPDATE users SET lat = $1, lng = $2 WHERE id = $3`,
+      [lat, lng, req.params.id]
+    );
+    res.json({ message: 'Koordinate postavljene!' });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// OVE DVE LINIJE SU VEĆ NA KRAJU - OSTAVI IH POSLEDNJE:
+const port = process.env.PORT || 3000;
+app.listen(port, () => {
+  console.log(`Server startovan na portu ${port}`);
+});
 
 const port = process.env.PORT || 3000;
 app.listen(port, () => {

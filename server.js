@@ -435,7 +435,7 @@ app.get('/svi-prodavci', async (req, res) => {
         id: row.id,
         ime: row.ime || 'Bez imena',
         opis: row.opis || 'Porodična proizvodnja svežih domaćih proizvoda.',
-        slika: row.slika || 'https://via.placeholder.com/400x220?text=' + encodeURIComponent(row.ime || 'Prodavac'),
+        slika: row.slika || '',
         lokacija: row.lokacija || 'Lokacija nije navedena',
         nise: niseParsed
       };

@@ -41,6 +41,26 @@ const pool = new Pool({
   ssl: { rejectUnauthorized: false }
 });
 
+// Helper funkcija za upload slike na Cloudinary
+async function uploadSlika(base64) {
+  if (!base64) return null;
+  // Ako je već URL (stara slika), vrati kao je
+  if (base64.startsWith('http')) return base64;
+  try {
+    const result = await cloudinary.uploader.upload(base64, {
+      folder: 'lokalni-plodovi',
+      transformation: [
+        { quality: 'auto:good' },
+        { width: 800, crop: 'limit' }
+      ]
+    });
+    return result.secure_url;
+  } catch (err) {
+    console.error('Cloudinary upload greška:', err);
+    return base64; // Ako upload ne uspe, vrati base64 kao fallback
+  }
+}
+
 async function initDB() {
   try {
     await pool.query(`
@@ -201,7 +221,7 @@ app.post('/register-kupac', async (req, res) => {
   }
 });
 
-// LOGIN (isti za oba tipa)
+// LOGIN
 app.post('/login', async (req, res) => {
   const { email, lozinka } = req.body;
 
@@ -298,7 +318,7 @@ app.get('/profile', async (req, res) => {
   }
 });
 
-// UPDATE PROFILA
+// UPDATE PROFILA — slike idu na Cloudinary
 app.post('/profile/update', async (req, res) => {
   const token = req.headers.authorization?.split(' ')[1];
   if (!token) return res.status(401).json({ error: 'Niste ulogovani' });
@@ -311,12 +331,22 @@ app.post('/profile/update', async (req, res) => {
     const vrednosti = [];
     let i = 1;
 
-    if (ime !== undefined)             { polja.push(`ime = $${i++}`);         vrednosti.push(ime); }
-    if (opis !== undefined)            { polja.push(`opis = $${i++}`);        vrednosti.push(opis); }
-    if (telefon !== undefined)         { polja.push(`telefon = $${i++}`);     vrednosti.push(telefon); }
-    if (lokacija !== undefined)        { polja.push(`lokacija = $${i++}`);    vrednosti.push(lokacija); }
-    if (slikaBase64 !== undefined)     { polja.push(`slika = $${i++}`);       vrednosti.push(slikaBase64); }
-    if (coverSlikaBase64 !== undefined){ polja.push(`cover_slika = $${i++}`); vrednosti.push(coverSlikaBase64); }
+    if (ime !== undefined)      { polja.push(`ime = $${i++}`);      vrednosti.push(ime); }
+    if (opis !== undefined)     { polja.push(`opis = $${i++}`);     vrednosti.push(opis); }
+    if (telefon !== undefined)  { polja.push(`telefon = $${i++}`);  vrednosti.push(telefon); }
+    if (lokacija !== undefined) { polja.push(`lokacija = $${i++}`); vrednosti.push(lokacija); }
+
+    if (slikaBase64 !== undefined) {
+      const slikaUrl = await uploadSlika(slikaBase64);
+      polja.push(`slika = $${i++}`);
+      vrednosti.push(slikaUrl);
+    }
+
+    if (coverSlikaBase64 !== undefined) {
+      const coverUrl = await uploadSlika(coverSlikaBase64);
+      polja.push(`cover_slika = $${i++}`);
+      vrednosti.push(coverUrl);
+    }
 
     if (polja.length === 0) {
       return res.status(400).json({ error: 'Nema podataka za izmenu' });
@@ -371,9 +401,11 @@ app.post('/objavi-novost', async (req, res) => {
 
     if (!tekst || tekst.trim() === '') return res.status(400).json({ error: 'Tekst objave ne može biti prazan' });
 
+    const slikaUrl = await uploadSlika(slikaBase64);
+
     const result = await pool.query(
       `INSERT INTO objave ("userId", tekst, slika, video) VALUES ($1, $2, $3, $4) RETURNING id`,
-      [decoded.userId, tekst.trim(), slikaBase64 || null, videoUrl || null]
+      [decoded.userId, tekst.trim(), slikaUrl || null, videoUrl || null]
     );
 
     res.json({ message: 'Objava uspešno dodata!', objavaId: result.rows[0].id });
@@ -448,7 +480,7 @@ app.get('/svi-prodavci', async (req, res) => {
   }
 });
 
-// DODAJ PROIZVOD
+// DODAJ PROIZVOD — slika ide na Cloudinary
 app.post('/dodaj-proizvod', async (req, res) => {
   const token = req.headers.authorization?.split(' ')[1];
   if (!token) return res.status(401).json({ error: 'Niste ulogovani' });
@@ -461,10 +493,12 @@ app.post('/dodaj-proizvod', async (req, res) => {
       return res.status(400).json({ error: 'Obavezna polja nisu popunjena' });
     }
 
+    const slikaUrl = await uploadSlika(slikaBase64);
+
     const result = await pool.query(
       `INSERT INTO proizvodi ("userId", naziv, opis, cena, kolicina, "glavnaNisa", podnisa, slika)
        VALUES ($1, $2, $3, $4, $5, $6, $7, $8) RETURNING id`,
-      [decoded.userId, naziv, opis || null, cena, kolicina, glavnaNisa, podnisa || null, slikaBase64 || null]
+      [decoded.userId, naziv, opis || null, cena, kolicina, glavnaNisa, podnisa || null, slikaUrl || null]
     );
 
     res.status(201).json({ message: 'Proizvod uspešno izložen na pijac!', proizvodId: result.rows[0].id });
@@ -553,7 +587,7 @@ app.delete('/proizvod/:id', async (req, res) => {
   }
 });
 
-// PRODAVCI ZA MAPU — sa kešovanjem koordinata u bazi
+// PRODAVCI ZA MAPU
 app.get('/prodavci-mapa', async (req, res) => {
   try {
     const result = await pool.query(
@@ -567,7 +601,6 @@ app.get('/prodavci-mapa', async (req, res) => {
       let niseParsed = [];
       try { niseParsed = row.nise ? JSON.parse(row.nise) : []; } catch (e) {}
 
-      // Ako već ima koordinate u bazi — koristi ih direktno, nema Nominatim zahteva
       if (row.lat && row.lng) {
         prodavci.push({
           id: row.id,
@@ -582,7 +615,6 @@ app.get('/prodavci-mapa', async (req, res) => {
         continue;
       }
 
-      // Ako nema koordinata — geokodira i čuva u bazu
       if (!row.lokacija) continue;
 
       try {
@@ -595,9 +627,9 @@ app.get('/prodavci-mapa', async (req, res) => {
 
         let koordinate = null;
         for (const v of varijante) {
-          await new Promise(r => setTimeout(r, 1100)); // 1 req/sec Nominatim limit
+          await new Promise(r => setTimeout(r, 1100));
           const geoResponse = await fetch(
-            `https://nominatim.openstreetmap.org/search?q=${encodeURIComponent(v + ', Serbia')}&format=json&limit=1`,
+            `https://nominatim.openstreetmap.org/search?q=${encodeURIComponent(v)}&format=json&limit=1&countrycodes=rs`,
             { headers: { 'User-Agent': 'LokalniPlodovi/1.0' } }
           );
           const geoData = await geoResponse.json();
@@ -608,7 +640,6 @@ app.get('/prodavci-mapa', async (req, res) => {
         }
 
         if (koordinate) {
-          // Sačuvaj u bazu — sledeći put nema geocodinga
           await pool.query(
             `UPDATE users SET lat = $1, lng = $2 WHERE id = $3`,
             [koordinate.lat, koordinate.lng, row.id]
@@ -716,6 +747,19 @@ app.delete('/admin/proizvod/:id', adminAuth, async (req, res) => {
     await pool.query('DELETE FROM lista_zelja WHERE proizvod_id = $1', [req.params.id]);
     await pool.query('DELETE FROM proizvodi WHERE id = $1', [req.params.id]);
     res.json({ message: 'Proizvod obrisan' });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.post('/admin/set-koordinate/:id', adminAuth, async (req, res) => {
+  const { lat, lng } = req.body;
+  try {
+    await pool.query(
+      `UPDATE users SET lat = $1, lng = $2 WHERE id = $3`,
+      [lat, lng, req.params.id]
+    );
+    res.json({ message: 'Koordinate postavljene!' });
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
@@ -943,22 +987,21 @@ app.get('/lista-zelja', async (req, res) => {
     res.status(500).json({ error: err.message });
   }
 });
-// ... postojeći kod ...
 
-// ── LISTA ŽELJA ── (već postoji)
-// ... 
+// Endpoint za provjeru da li je proizvod u listi zelja
+app.get('/lista-zelja/provjeri/:proizvod_id', async (req, res) => {
+  const token = req.headers.authorization?.split(' ')[1];
+  if (!token) return res.json({ uListi: false });
 
-// NOVO - DODAJ OVDE:
-app.post('/admin/set-koordinate/:id', adminAuth, async (req, res) => {
-  const { lat, lng } = req.body;
   try {
-    await pool.query(
-      `UPDATE users SET lat = $1, lng = $2 WHERE id = $3`,
-      [lat, lng, req.params.id]
+    const decoded = jwt.verify(token, JWT_SECRET);
+    const result = await pool.query(
+      `SELECT id FROM lista_zelja WHERE user_id = $1 AND proizvod_id = $2`,
+      [decoded.userId, req.params.proizvod_id]
     );
-    res.json({ message: 'Koordinate postavljene!' });
+    res.json({ uListi: result.rows.length > 0 });
   } catch (err) {
-    res.status(500).json({ error: err.message });
+    res.json({ uListi: false });
   }
 });
 

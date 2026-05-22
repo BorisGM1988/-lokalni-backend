@@ -434,6 +434,35 @@ app.delete('/admin/ocena/:id', adminAuth, async (req, res) => {
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
+// ADMIN: OBRIŠI OBJAVU
+app.delete('/admin/objava/:id', adminAuth, async (req, res) => {
+  try {
+    await pool.query('DELETE FROM objave WHERE id = $1', [req.params.id]);
+    res.json({ message: 'Objava obrisana' });
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+// ADMIN: INBOX STATUS - ko ima poruke
+app.get('/admin/inbox-status', adminAuth, async (req, res) => {
+  try {
+    const result = await pool.query(`
+      SELECT
+        u.id,
+        u.ime,
+        u.email,
+        u.tip,
+        COUNT(p.id) as ukupno_poruka,
+        COUNT(CASE WHEN p.procitano = FALSE THEN 1 END) as neprocitane
+      FROM users u
+      LEFT JOIN poruke p ON p.ka_user_id = u.id
+      GROUP BY u.id, u.ime, u.email, u.tip
+      HAVING COUNT(p.id) > 0
+      ORDER BY neprocitane DESC, ukupno_poruka DESC
+    `);
+    res.json(result.rows);
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
 app.delete('/admin/korisnik/:id', adminAuth, async (req, res) => {
   try {
     await pool.query('DELETE FROM proizvodi WHERE "userId" = $1', [req.params.id]);

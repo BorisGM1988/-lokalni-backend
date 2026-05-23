@@ -3,8 +3,76 @@ const { Pool } = require('pg');
 const bcrypt = require('bcryptjs');
 const jwt = require('jsonwebtoken');
 const cloudinary = require('cloudinary').v2;
+const nodemailer = require('nodemailer');
 
 const app = express();
+
+// ===== NODEMAILER SETUP =====
+const transporter = nodemailer.createTransport({
+  service: 'gmail',
+  auth: {
+    user: process.env.GMAIL_USER,
+    pass: process.env.GMAIL_PASS
+  }
+});
+
+async function posaljiEmailNotifikaciju(email, ime, odKoga) {
+  try {
+    await transporter.sendMail({
+      from: `"LokalniPlodovi" <${process.env.GMAIL_USER}>`,
+      to: email,
+      subject: '📬 Imate novu poruku na LokalniPlodovi',
+      html: `
+        <div style="font-family:Arial,sans-serif;max-width:500px;margin:0 auto;padding:20px;">
+          <h2 style="color:#2e7d32;">🌿 LokalniPlodovi</h2>
+          <p>Pozdrav <strong>${ime}</strong>,</p>
+          <p>Dobili ste novu poruku od korisnika <strong>${odKoga}</strong>.</p>
+          <a href="https://lokalniplodovi.rs/moj-profil.html" 
+             style="display:inline-block;background:#2e7d32;color:white;padding:12px 24px;border-radius:8px;text-decoration:none;margin-top:10px;">
+            Pogledaj poruku
+          </a>
+          <p style="color:#999;font-size:12px;margin-top:30px;">LokalniPlodovi • lokalniplodovi.rs</p>
+        </div>
+      `
+    });
+    console.log('Email notifikacija poslata na:', email);
+  } catch (err) {
+    console.error('Email greška:', err.message);
+  }
+}
+
+// ADMIN: GRUPNI EMAIL
+async function posaljiGrupniEmail(emailovi, naslov, poruka) {
+  const rezultati = { uspesno: 0, neuspesno: 0 };
+  for (const email of emailovi) {
+    try {
+      await transporter.sendMail({
+        from: `"LokalniPlodovi" <${process.env.GMAIL_USER}>`,
+        to: email,
+        subject: naslov,
+        html: `
+          <div style="font-family:Arial,sans-serif;max-width:500px;margin:0 auto;padding:20px;">
+            <h2 style="color:#2e7d32;">🌿 LokalniPlodovi</h2>
+            <div style="background:#f5f5f5;padding:15px;border-radius:8px;margin:15px 0;">
+              ${poruka.replace(/\n/g, '<br>')}
+            </div>
+            <a href="https://lokalniplodovi.rs" 
+               style="display:inline-block;background:#2e7d32;color:white;padding:12px 24px;border-radius:8px;text-decoration:none;margin-top:10px;">
+              Poseti sajt
+            </a>
+            <p style="color:#999;font-size:12px;margin-top:30px;">LokalniPlodovi • lokalniplodovi.rs</p>
+          </div>
+        `
+      });
+      rezultati.uspesno++;
+    } catch (err) {
+      console.error('Greška za email:', email, err.message);
+      rezultati.neuspesno++;
+    }
+  }
+  return rezultati;
+}
+// ===== KRAJ NODEMAILER SETUP =====
 
 cloudinary.config({
   cloud_name: process.env.CLOUDINARY_CLOUD_NAME,
@@ -491,6 +559,22 @@ app.post('/admin/set-koordinate/:id', adminAuth, async (req, res) => {
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
+// ADMIN: GRUPNI EMAIL
+app.post('/admin/grupni-email', adminAuth, async (req, res) => {
+  const { naslov, poruka, ciljnaGrupa } = req.body;
+  if (!naslov || !poruka) return res.status(400).json({ error: 'Naslov i poruka su obavezni' });
+  try {
+    let sql = 'SELECT email FROM users WHERE 1=1';
+    if (ciljnaGrupa === 'prodavci') sql += ` AND tip = 'prodavac'`;
+    else if (ciljnaGrupa === 'kupci') sql += ` AND tip = 'kupac'`;
+    const result = await pool.query(sql);
+    const emailovi = result.rows.map(r => r.email).filter(Boolean);
+    if (emailovi.length === 0) return res.status(400).json({ error: 'Nema korisnika za slanje' });
+    const rezultati = await posaljiGrupniEmail(emailovi, naslov, poruka);
+    res.json({ message: `Email poslat! Uspešno: ${rezultati.uspesno}, Neuspešno: ${rezultati.neuspesno}` });
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
 app.get('/objave/:userId', async (req, res) => {
   try {
     const result = await pool.query(`SELECT id, tekst, slika, video, created_at FROM objave WHERE "userId" = $1 ORDER BY created_at DESC`, [req.params.userId]);
@@ -507,6 +591,18 @@ app.post('/poruka', async (req, res) => {
     if (!tekst || !ka_user_id) return res.status(400).json({ error: 'Nedostaju podaci' });
     if (decoded.userId === parseInt(ka_user_id)) return res.status(400).json({ error: 'Ne možete pisati sebi' });
     const result = await pool.query(`INSERT INTO poruke (od_user_id, ka_user_id, tekst) VALUES ($1, $2, $3) RETURNING id`, [decoded.userId, ka_user_id, tekst.trim()]);
+
+    // Pošalji email notifikaciju primaocu
+    const primalac = await pool.query('SELECT ime, email FROM users WHERE id = $1', [ka_user_id]);
+    const posiljalac = await pool.query('SELECT ime FROM users WHERE id = $1', [decoded.userId]);
+    if (primalac.rows[0] && primalac.rows[0].email) {
+      await posaljiEmailNotifikaciju(
+        primalac.rows[0].email,
+        primalac.rows[0].ime,
+        posiljalac.rows[0].ime
+      );
+    }
+
     res.json({ message: 'Poruka poslata!', id: result.rows[0].id });
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
@@ -562,7 +658,6 @@ app.post('/ocena', async (req, res) => {
     if (ocena < 1 || ocena > 5) return res.status(400).json({ error: 'Ocena mora biti između 1 i 5' });
     if (decoded.userId === parseInt(za_user_id)) return res.status(400).json({ error: 'Ne možete oceniti sebe' });
 
-    // Provera 1: Nalog mora biti star 7+ dana
     const userCheck = await pool.query('SELECT created_at FROM users WHERE id = $1', [decoded.userId]);
     if (!userCheck.rows[0]) return res.status(404).json({ error: 'Korisnik nije pronađen' });
     const razlikaDana = (new Date() - new Date(userCheck.rows[0].created_at)) / (1000 * 60 * 60 * 24);
@@ -570,7 +665,6 @@ app.post('/ocena', async (req, res) => {
       return res.status(403).json({ error: 'Vaš nalog mora biti star najmanje 7 dana da biste mogli da ocenjujete.' });
     }
 
-    // Provera 2: Mora biti poslao poruku prodavcu
     const porukaCheck = await pool.query('SELECT id FROM poruke WHERE od_user_id = $1 AND ka_user_id = $2 LIMIT 1', [decoded.userId, za_user_id]);
     if (porukaCheck.rows.length === 0) {
       return res.status(403).json({ error: 'Možete oceniti samo prodavce sa kojima ste stupili u kontakt putem poruke.' });

@@ -1,4 +1,5 @@
 const express = require('express');
+const compression = require('compression');
 const { Pool } = require('pg');
 const bcrypt = require('bcryptjs');
 const jwt = require('jsonwebtoken');
@@ -7,6 +8,9 @@ const sgMail = require('@sendgrid/mail');
 sgMail.setApiKey(process.env.SENDGRID_API_KEY);
 
 const app = express();
+
+// ===== GZIP KOMPRESIJA =====
+app.use(compression());
 
 // ===== SENDGRID SETUP =====
 async function posaljiEmailNotifikaciju(email, ime, odKoga) {

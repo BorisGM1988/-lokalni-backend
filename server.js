@@ -115,6 +115,9 @@ async function initDB() {
     await pool.query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS slika TEXT`);
     await pool.query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS cover_slika TEXT`);
     await pool.query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS tip TEXT DEFAULT 'prodavac'`);
+    // ===== USERNAME KOLONA =====
+    await pool.query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS username TEXT UNIQUE`);
+    // ============================
     await pool.query(`CREATE TABLE IF NOT EXISTS proizvodi (id SERIAL PRIMARY KEY, "userId" INTEGER, naziv TEXT, opis TEXT, cena NUMERIC, kolicina NUMERIC, "glavnaNisa" TEXT, podnisa TEXT, created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP)`);
     await pool.query(`ALTER TABLE proizvodi ADD COLUMN IF NOT EXISTS slika TEXT`);
     await pool.query(`CREATE TABLE IF NOT EXISTS objave (id SERIAL PRIMARY KEY, "userId" INTEGER NOT NULL, tekst TEXT NOT NULL, slika TEXT, created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP)`);
@@ -138,6 +141,54 @@ const JWT_SECRET = process.env.JWT_SECRET || 'promeni-ovo-u-dug-random-string-za
 app.get('/test', (req, res) => {
   res.send('Backend radi! Trenutno vreme: ' + new Date().toISOString());
 });
+
+// ===== USERNAME RUTE =====
+
+// Kratki link: lokalniplodovi.rs/p/baca-iz-jarka
+app.get('/p/:username', async (req, res) => {
+  try {
+    const result = await pool.query(`SELECT id FROM users WHERE username = $1`, [req.params.username]);
+    if (!result.rows[0]) return res.status(404).send('Profil nije pronađen');
+    res.redirect(`https://lokalniplodovi.rs/moj-profil.html?userId=${result.rows[0].id}`);
+  } catch (err) {
+    res.status(500).send('Greška na serveru');
+  }
+});
+
+// Postavljanje usernamea
+app.post('/profile/username', async (req, res) => {
+  const token = req.headers.authorization?.split(' ')[1];
+  if (!token) return res.status(401).json({ error: 'Niste ulogovani' });
+  try {
+    const decoded = jwt.verify(token, JWT_SECRET);
+    const { username } = req.body;
+    if (!username) return res.status(400).json({ error: 'Username je obavezan' });
+    // Dozvoli samo slova, brojeve, crtice i donje crte
+    if (!/^[a-z0-9\-_]+$/.test(username)) {
+      return res.status(400).json({ error: 'Username sme da sadrži samo mala slova, brojeve, - i _' });
+    }
+    if (username.length < 3 || username.length > 30) {
+      return res.status(400).json({ error: 'Username mora biti između 3 i 30 karaktera' });
+    }
+    await pool.query(`UPDATE users SET username = $1 WHERE id = $2`, [username, decoded.userId]);
+    res.json({ message: 'Username uspešno postavljen!', link: `https://lokalniplodovi.rs/p/${username}` });
+  } catch (err) {
+    if (err.code === '23505') return res.status(409).json({ error: 'Ovaj username već postoji, izaberite drugi' });
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Provera da li je username slobodan
+app.get('/profile/username/provjeri/:username', async (req, res) => {
+  try {
+    const result = await pool.query(`SELECT id FROM users WHERE username = $1`, [req.params.username]);
+    res.json({ slobodan: result.rows.length === 0 });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// ===== KRAJ USERNAME RUTA =====
 
 app.post('/register', async (req, res) => {
   const { ime, email, lozinka, telefon, lokacija, nise, opis } = req.body;
@@ -190,7 +241,7 @@ app.post('/login', async (req, res) => {
     if (!isMatch) return res.status(401).json({ error: 'Pogrešan email ili lozinka' });
     const tip = user.tip || 'prodavac';
     const token = jwt.sign({ userId: user.id, email, tip }, JWT_SECRET, { expiresIn: '30d' });
-    res.json({ message: 'Prijava uspešna', token, user: { id: user.id, ime: user.ime, email: user.email, telefon: user.telefon, lokacija: user.lokacija, opis: user.opis, nise: user.nise ? JSON.parse(user.nise) : [], tip } });
+    res.json({ message: 'Prijava uspešna', token, user: { id: user.id, ime: user.ime, email: user.email, telefon: user.telefon, lokacija: user.lokacija, opis: user.opis, nise: user.nise ? JSON.parse(user.nise) : [], tip, username: user.username || null } });
   } catch (err) {
     console.error(err);
     res.status(500).json({ error: 'Greška na serveru' });
@@ -205,19 +256,19 @@ app.get('/profile', async (req, res) => {
   try {
     if (userId) {
       const result = await pool.query(
-        `SELECT id, ime, email, telefon, lokacija, opis, nise, slika, cover_slika, tip, created_at as "registeredAt" FROM users WHERE id = $1`,
+        `SELECT id, ime, email, telefon, lokacija, opis, nise, slika, cover_slika, tip, username, created_at as "registeredAt" FROM users WHERE id = $1`,
         [userId]
       );
       const user = result.rows[0];
       if (!user) return res.status(404).json({ error: 'Korisnik nije pronađen' });
-      return res.json({ ime: user.ime, email: user.email, telefon: user.telefon, lokacija: user.lokacija, opis: user.opis || '', nise: user.nise ? JSON.parse(user.nise) : [], slika: user.slika || '', coverSlika: user.cover_slika || '', tip: user.tip || 'prodavac', registeredAt: user.registeredAt });
+      return res.json({ ime: user.ime, email: user.email, telefon: user.telefon, lokacija: user.lokacija, opis: user.opis || '', nise: user.nise ? JSON.parse(user.nise) : [], slika: user.slika || '', coverSlika: user.cover_slika || '', tip: user.tip || 'prodavac', username: user.username || null, registeredAt: user.registeredAt });
     }
     if (!token) return res.status(401).json({ error: 'Niste ulogovani' });
     const decoded = jwt.verify(token, JWT_SECRET);
     const result = await pool.query('SELECT * FROM users WHERE id = $1', [decoded.userId]);
     const user = result.rows[0];
     if (!user) return res.status(404).json({ error: 'Korisnik nije pronađen' });
-    res.json({ ime: user.ime, email: user.email, telefon: user.telefon, lokacija: user.lokacija, opis: user.opis || '', nise: user.nise ? JSON.parse(user.nise) : [], slika: user.slika || '', coverSlika: user.cover_slika || '', tip: user.tip || 'prodavac' });
+    res.json({ ime: user.ime, email: user.email, telefon: user.telefon, lokacija: user.lokacija, opis: user.opis || '', nise: user.nise ? JSON.parse(user.nise) : [], slika: user.slika || '', coverSlika: user.cover_slika || '', tip: user.tip || 'prodavac', username: user.username || null });
   } catch (err) {
     console.error(err);
     res.status(401).json({ error: 'Nevažeći token' });
@@ -309,11 +360,11 @@ app.delete('/objava/:id', async (req, res) => {
 
 app.get('/svi-prodavci', async (req, res) => {
   try {
-    const result = await pool.query(`SELECT id, ime, opis, slika, lokacija, nise FROM users WHERE tip = 'prodavac' OR tip IS NULL ORDER BY ime ASC`);
+    const result = await pool.query(`SELECT id, ime, opis, slika, lokacija, nise, username FROM users WHERE tip = 'prodavac' OR tip IS NULL ORDER BY ime ASC`);
     const prodavci = result.rows.map(row => {
       let niseParsed = [];
       try { niseParsed = row.nise ? JSON.parse(row.nise) : []; } catch (e) {}
-      return { id: row.id, ime: row.ime || 'Bez imena', opis: row.opis || 'Porodična proizvodnja svežih domaćih proizvoda.', slika: row.slika || '', lokacija: row.lokacija || 'Lokacija nije navedena', nise: niseParsed };
+      return { id: row.id, ime: row.ime || 'Bez imena', opis: row.opis || 'Porodična proizvodnja svežih domaćih proizvoda.', slika: row.slika || '', lokacija: row.lokacija || 'Lokacija nije navedena', nise: niseParsed, username: row.username || null };
     });
     res.json(prodavci);
   } catch (err) {
@@ -443,7 +494,7 @@ app.get('/admin/stats', adminAuth, async (req, res) => {
 
 app.get('/admin/korisnici', adminAuth, async (req, res) => {
   try {
-    const result = await pool.query(`SELECT id, ime, email, telefon, lokacija, nise, tip, created_at FROM users ORDER BY created_at DESC`);
+    const result = await pool.query(`SELECT id, ime, email, telefon, lokacija, nise, tip, username, created_at FROM users ORDER BY created_at DESC`);
     res.json(result.rows);
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
@@ -533,6 +584,19 @@ app.post('/admin/set-koordinate/:id', adminAuth, async (req, res) => {
     await pool.query(`UPDATE users SET lat = $1, lng = $2 WHERE id = $3`, [lat, lng, req.params.id]);
     res.json({ message: 'Koordinate postavljene!' });
   } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+// Admin: postavi username za prodavca
+app.post('/admin/set-username/:id', adminAuth, async (req, res) => {
+  const { username } = req.body;
+  if (!username) return res.status(400).json({ error: 'Username je obavezan' });
+  try {
+    await pool.query(`UPDATE users SET username = $1 WHERE id = $2`, [username, req.params.id]);
+    res.json({ message: 'Username postavljen!', link: `https://lokalniplodovi.rs/p/${username}` });
+  } catch (err) {
+    if (err.code === '23505') return res.status(409).json({ error: 'Username već postoji' });
+    res.status(500).json({ error: err.message });
+  }
 });
 
 app.post('/admin/grupni-email', adminAuth, async (req, res) => {

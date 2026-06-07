@@ -202,7 +202,7 @@ app.post('/register', async (req, res) => {
       [ime, email, hashedPassword, telefon, lokacija, JSON.stringify(nise || []), opis || null]
     );
     const userId = result.rows[0].id;
-    const token = jwt.sign({ userId, email, tip: 'prodavac' }, JWT_SECRET, { expiresIn: '30d' });
+    const token = jwt.sign({ userId, email, tip: 'prodavac' }, JWT_SECRET, { expiresIn: '90d' });
     res.status(201).json({ message: 'Registracija uspešna', token, user: { id: userId, ime, email, tip: 'prodavac' } });
   } catch (err) {
     if (err.code === '23505') return res.status(409).json({ error: 'Email već postoji' });
@@ -221,7 +221,7 @@ app.post('/register-kupac', async (req, res) => {
       [ime, email, hashedPassword, telefon || null, lokacija || null]
     );
     const userId = result.rows[0].id;
-    const token = jwt.sign({ userId, email, tip: 'kupac' }, JWT_SECRET, { expiresIn: '30d' });
+    const token = jwt.sign({ userId, email, tip: 'kupac' }, JWT_SECRET, { expiresIn: '90d' });
     res.status(201).json({ message: 'Registracija kupca uspešna', token, user: { id: userId, ime, email, tip: 'kupac' } });
   } catch (err) {
     if (err.code === '23505') return res.status(409).json({ error: 'Email već postoji' });
@@ -240,7 +240,7 @@ app.post('/login', async (req, res) => {
     const isMatch = await bcrypt.compare(lozinka, user.password);
     if (!isMatch) return res.status(401).json({ error: 'Pogrešan email ili lozinka' });
     const tip = user.tip || 'prodavac';
-    const token = jwt.sign({ userId: user.id, email, tip }, JWT_SECRET, { expiresIn: '30d' });
+    const token = jwt.sign({ userId: user.id, email, tip }, JWT_SECRET, { expiresIn: '90d' });
     res.json({ message: 'Prijava uspešna', token, user: { id: user.id, ime: user.ime, email: user.email, telefon: user.telefon, lokacija: user.lokacija, opis: user.opis, nise: user.nise ? JSON.parse(user.nise) : [], tip, username: user.username || null } });
   } catch (err) {
     console.error(err);

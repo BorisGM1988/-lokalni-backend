@@ -1,3 +1,4 @@
+cat > /mnt/user-data/outputs/server.js << 'EOF'
 const express = require('express');
 const compression = require('compression');
 const { Pool } = require('pg');
@@ -163,7 +164,6 @@ app.post('/profile/username', async (req, res) => {
     const decoded = jwt.verify(token, JWT_SECRET);
     const { username } = req.body;
     if (!username) return res.status(400).json({ error: 'Username je obavezan' });
-    // Dozvoli samo slova, brojeve, crtice i donje crte
     if (!/^[a-z0-9\-_]+$/.test(username)) {
       return res.status(400).json({ error: 'Username sme da sadrži samo mala slova, brojeve, - i _' });
     }
@@ -586,7 +586,6 @@ app.post('/admin/set-koordinate/:id', adminAuth, async (req, res) => {
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
-// Admin: postavi username za prodavca
 app.post('/admin/set-username/:id', adminAuth, async (req, res) => {
   const { username } = req.body;
   if (!username) return res.status(400).json({ error: 'Username je obavezan' });
@@ -844,6 +843,16 @@ app.get('/lista-zelja/provjeri/:proizvod_id', async (req, res) => {
 });
 
 const port = process.env.PORT || 3000;
+
+// ===== SELF-PING — server ostaje budan 24/7 =====
+const http = require('http');
+setInterval(() => {
+  http.get(`http://localhost:${port}/test`, (res) => {
+    res.resume();
+  }).on('error', () => {});
+}, 4 * 60 * 1000); // ping svake 4 minuta
+// ===== KRAJ SELF-PING =====
+
 app.listen(port, () => {
   console.log(`Server startovan na portu ${port}`);
 });

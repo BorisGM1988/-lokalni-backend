@@ -115,9 +115,7 @@ async function initDB() {
     await pool.query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS slika TEXT`);
     await pool.query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS cover_slika TEXT`);
     await pool.query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS tip TEXT DEFAULT 'prodavac'`);
-    // ===== USERNAME KOLONA =====
     await pool.query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS username TEXT UNIQUE`);
-    // ============================
     await pool.query(`CREATE TABLE IF NOT EXISTS proizvodi (id SERIAL PRIMARY KEY, "userId" INTEGER, naziv TEXT, opis TEXT, cena NUMERIC, kolicina NUMERIC, "glavnaNisa" TEXT, podnisa TEXT, created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP)`);
     await pool.query(`ALTER TABLE proizvodi ADD COLUMN IF NOT EXISTS slika TEXT`);
     await pool.query(`CREATE TABLE IF NOT EXISTS objave (id SERIAL PRIMARY KEY, "userId" INTEGER NOT NULL, tekst TEXT NOT NULL, slika TEXT, created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP)`);
@@ -128,6 +126,21 @@ async function initDB() {
     await pool.query(`CREATE TABLE IF NOT EXISTS lista_zelja (id SERIAL PRIMARY KEY, user_id INTEGER NOT NULL, proizvod_id INTEGER NOT NULL, created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP, UNIQUE(user_id, proizvod_id))`);
     await pool.query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS lat NUMERIC`);
     await pool.query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS lng NUMERIC`);
+
+    // ===== BLOG TABELA =====
+    await pool.query(`CREATE TABLE IF NOT EXISTS blogovi (
+      id SERIAL PRIMARY KEY,
+      "userId" INTEGER NOT NULL,
+      naslov TEXT NOT NULL,
+      tekst TEXT NOT NULL,
+      slika TEXT,
+      video TEXT,
+      created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+    )`);
+    await pool.query(`ALTER TABLE blogovi ADD COLUMN IF NOT EXISTS slika TEXT`);
+    await pool.query(`ALTER TABLE blogovi ADD COLUMN IF NOT EXISTS video TEXT`);
+    // =======================
+
     console.log('Baza inicijalizovana uspešno!');
   } catch (err) {
     console.error('Greška pri inicijalizaciji baze:', err.message);
@@ -144,7 +157,6 @@ app.get('/test', (req, res) => {
 
 // ===== USERNAME RUTE =====
 
-// Kratki link: lokalniplodovi.rs/p/baca-iz-jarka
 app.get('/p/:username', async (req, res) => {
   try {
     const result = await pool.query(`SELECT id FROM users WHERE username = $1`, [req.params.username]);
@@ -155,7 +167,6 @@ app.get('/p/:username', async (req, res) => {
   }
 });
 
-// Postavljanje usernamea
 app.post('/profile/username', async (req, res) => {
   const token = req.headers.authorization?.split(' ')[1];
   if (!token) return res.status(401).json({ error: 'Niste ulogovani' });
@@ -163,7 +174,6 @@ app.post('/profile/username', async (req, res) => {
     const decoded = jwt.verify(token, JWT_SECRET);
     const { username } = req.body;
     if (!username) return res.status(400).json({ error: 'Username je obavezan' });
-    // Dozvoli samo slova, brojeve, crtice i donje crte
     if (!/^[a-z0-9\-_]+$/.test(username)) {
       return res.status(400).json({ error: 'Username sme da sadrži samo mala slova, brojeve, - i _' });
     }
@@ -178,7 +188,6 @@ app.post('/profile/username', async (req, res) => {
   }
 });
 
-// Provera da li je username slobodan
 app.get('/profile/username/provjeri/:username', async (req, res) => {
   try {
     const result = await pool.query(`SELECT id FROM users WHERE username = $1`, [req.params.username]);
@@ -488,7 +497,8 @@ app.get('/admin/stats', adminAuth, async (req, res) => {
     const proizvodi = await pool.query('SELECT COUNT(*) FROM proizvodi');
     const objave = await pool.query('SELECT COUNT(*) FROM objave');
     const kupci = await pool.query("SELECT COUNT(*) FROM users WHERE tip = 'kupac'");
-    res.json({ korisnici: parseInt(korisnici.rows[0].count), proizvodi: parseInt(proizvodi.rows[0].count), objave: parseInt(objave.rows[0].count), kupci: parseInt(kupci.rows[0].count) });
+    const blogovi = await pool.query('SELECT COUNT(*) FROM blogovi');
+    res.json({ korisnici: parseInt(korisnici.rows[0].count), proizvodi: parseInt(proizvodi.rows[0].count), objave: parseInt(objave.rows[0].count), kupci: parseInt(kupci.rows[0].count), blogovi: parseInt(blogovi.rows[0].count) });
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
@@ -562,6 +572,7 @@ app.delete('/admin/korisnik/:id', adminAuth, async (req, res) => {
   try {
     await pool.query('DELETE FROM proizvodi WHERE "userId" = $1', [req.params.id]);
     await pool.query('DELETE FROM objave WHERE "userId" = $1', [req.params.id]);
+    await pool.query('DELETE FROM blogovi WHERE "userId" = $1', [req.params.id]);
     await pool.query('DELETE FROM poruke WHERE od_user_id = $1 OR ka_user_id = $1', [req.params.id]);
     await pool.query('DELETE FROM ocene WHERE od_user_id = $1 OR za_user_id = $1', [req.params.id]);
     await pool.query('DELETE FROM lista_zelja WHERE user_id = $1', [req.params.id]);
@@ -586,7 +597,6 @@ app.post('/admin/set-koordinate/:id', adminAuth, async (req, res) => {
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
-// Admin: postavi username za prodavca
 app.post('/admin/set-username/:id', adminAuth, async (req, res) => {
   const { username } = req.body;
   if (!username) return res.status(400).json({ error: 'Username je obavezan' });
@@ -613,6 +623,26 @@ app.post('/admin/grupni-email', adminAuth, async (req, res) => {
     res.json({ message: `Email poslat! Uspešno: ${rezultati.uspesno}, Neuspešno: ${rezultati.neuspesno}` });
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
+
+// ===== ADMIN BLOG =====
+app.get('/admin/blogovi', adminAuth, async (req, res) => {
+  try {
+    const result = await pool.query(
+      `SELECT b.*, u.ime as "autorIme", u.email as "autorEmail"
+       FROM blogovi b JOIN users u ON b."userId" = u.id
+       ORDER BY b.created_at DESC`
+    );
+    res.json(result.rows);
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+app.delete('/admin/blog/:id', adminAuth, async (req, res) => {
+  try {
+    await pool.query('DELETE FROM blogovi WHERE id = $1', [req.params.id]);
+    res.json({ message: 'Blog obrisan' });
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+// =====================
 
 app.get('/objave/:userId', async (req, res) => {
   try {
@@ -842,6 +872,90 @@ app.get('/lista-zelja/provjeri/:proizvod_id', async (req, res) => {
     res.json({ uListi: result.rows.length > 0 });
   } catch (err) { res.json({ uListi: false }); }
 });
+
+// ===================================================
+// BLOG RUTE
+// ===================================================
+
+// Dodaj blog post
+app.post('/blog', async (req, res) => {
+  const token = req.headers.authorization?.split(' ')[1];
+  if (!token) return res.status(401).json({ error: 'Niste ulogovani' });
+  try {
+    const decoded = jwt.verify(token, JWT_SECRET);
+    const { naslov, tekst, slikaBase64, videoUrl } = req.body;
+    if (!naslov || !naslov.trim()) return res.status(400).json({ error: 'Naslov je obavezan' });
+    if (!tekst || !tekst.trim()) return res.status(400).json({ error: 'Tekst bloga je obavezan' });
+    const slikaUrl = await uploadSlika(slikaBase64);
+    const result = await pool.query(
+      `INSERT INTO blogovi ("userId", naslov, tekst, slika, video) VALUES ($1, $2, $3, $4, $5) RETURNING id`,
+      [decoded.userId, naslov.trim(), tekst.trim(), slikaUrl || null, videoUrl || null]
+    );
+    res.json({ message: 'Blog uspešno objavljen!', blogId: result.rows[0].id });
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: 'Greška na serveru' });
+  }
+});
+
+// Svi blog postovi
+app.get('/blogovi', async (req, res) => {
+  try {
+    const { userId, limit, offset } = req.query;
+    let sql = `
+      SELECT b.*, u.ime as "autorIme", u.slika as "autorSlika", u.lokacija as "autorLokacija"
+      FROM blogovi b
+      JOIN users u ON b."userId" = u.id
+      WHERE 1=1
+    `;
+    const params = [];
+    let i = 1;
+    if (userId) { sql += ` AND b."userId" = $${i++}`; params.push(userId); }
+    sql += ` ORDER BY b.created_at DESC`;
+    if (limit) { sql += ` LIMIT $${i++}`; params.push(parseInt(limit)); }
+    if (offset) { sql += ` OFFSET $${i++}`; params.push(parseInt(offset)); }
+    const result = await pool.query(sql, params);
+    res.json(result.rows);
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: 'Greška pri učitavanju blogova' });
+  }
+});
+
+// Jedan blog post
+app.get('/blog/:id', async (req, res) => {
+  try {
+    const result = await pool.query(
+      `SELECT b.*, u.ime as "autorIme", u.slika as "autorSlika", u.lokacija as "autorLokacija", u.username as "autorUsername", u.id as "autorId"
+       FROM blogovi b
+       JOIN users u ON b."userId" = u.id
+       WHERE b.id = $1`,
+      [req.params.id]
+    );
+    if (!result.rows[0]) return res.status(404).json({ error: 'Blog nije pronađen' });
+    res.json(result.rows[0]);
+  } catch (err) {
+    res.status(500).json({ error: 'Greška na serveru' });
+  }
+});
+
+// Obriši blog post
+app.delete('/blog/:id', async (req, res) => {
+  const token = req.headers.authorization?.split(' ')[1];
+  if (!token) return res.status(401).json({ error: 'Niste ulogovani' });
+  try {
+    const decoded = jwt.verify(token, JWT_SECRET);
+    const check = await pool.query('SELECT "userId" FROM blogovi WHERE id = $1', [req.params.id]);
+    if (!check.rows[0]) return res.status(404).json({ error: 'Blog nije pronađen' });
+    if (check.rows[0].userId !== decoded.userId) return res.status(403).json({ error: 'Nemate dozvolu' });
+    await pool.query('DELETE FROM blogovi WHERE id = $1', [req.params.id]);
+    res.json({ message: 'Blog uspešno obrisan' });
+  } catch (err) {
+    res.status(500).json({ error: 'Greška pri brisanju' });
+  }
+});
+
+// ===================================================
 
 const port = process.env.PORT || 3000;
 app.listen(port, () => {

@@ -155,6 +155,54 @@ app.get('/test', (req, res) => {
   res.send('Backend radi! Trenutno vreme: ' + new Date().toISOString());
 });
 
+// ===== OG META TAGOVI ZA FACEBOOK SHARE =====
+app.get('/blog-share/:id', async (req, res) => {
+  try {
+    const result = await pool.query(
+      `SELECT b.naslov, b.tekst, b.slika, u.ime as "autorIme"
+       FROM blogovi b JOIN users u ON b."userId" = u.id
+       WHERE b.id = $1`,
+      [req.params.id]
+    );
+    if (!result.rows[0]) return res.status(404).send('Blog nije pronađen');
+
+    const b = result.rows[0];
+    const naslov = b.naslov.replace(/"/g, '&quot;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+    const opis = b.tekst.substring(0, 160).replace(/\n/g, ' ').replace(/"/g, '&quot;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+    const slika = b.slika || 'https://lokalniplodovi.rs/og-slika.jpg';
+    const url = `https://lokalniplodovi.rs/blog.html?id=${req.params.id}`;
+
+    res.setHeader('Content-Type', 'text/html; charset=utf-8');
+    res.send(`<!DOCTYPE html>
+<html lang="sr">
+<head>
+  <meta charset="UTF-8">
+  <meta property="og:title" content="${naslov}">
+  <meta property="og:description" content="${opis}">
+  <meta property="og:image" content="${slika}">
+  <meta property="og:url" content="${url}">
+  <meta property="og:type" content="article">
+  <meta property="og:site_name" content="LokalniPlodovi">
+  <meta property="og:locale" content="sr_RS">
+  <meta name="twitter:card" content="summary_large_image">
+  <meta name="twitter:title" content="${naslov}">
+  <meta name="twitter:description" content="${opis}">
+  <meta name="twitter:image" content="${slika}">
+  <meta http-equiv="refresh" content="0;url=${url}">
+  <title>${naslov} – LokalniPlodovi</title>
+</head>
+<body>
+  <p>Preusmeravanje na blog post...</p>
+  <script>window.location.href='${url}';</script>
+</body>
+</html>`);
+  } catch (err) {
+    console.error('Blog share greška:', err);
+    res.status(500).send('Greška na serveru');
+  }
+});
+// =============================================
+
 // ===== USERNAME RUTE =====
 
 app.get('/p/:username', async (req, res) => {

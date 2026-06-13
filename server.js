@@ -278,7 +278,7 @@ app.get('/blog-share/:id', async (req, res) => {
 </head>
 <body>
   <p>Preusmeravanje na blog post...</p>
- 
+ <script>window.location.href='${url}';</script>
 </body>
 </html>`);
   } catch (err) {

@@ -155,6 +155,92 @@ app.get('/test', (req, res) => {
   res.send('Backend radi! Trenutno vreme: ' + new Date().toISOString());
 });
 
+// ===== SSR ZA BLOG.HTML — Facebook OG meta tagovi =====
+const fs = require('fs');
+const path = require('path');
+
+app.get('/blog.html', async (req, res) => {
+  const id = req.query.id;
+
+  // Bez ?id= parametra — vrati običan statički fajl
+  if (!id) {
+    return res.sendFile(path.join(__dirname, 'public', 'blog.html'));
+  }
+
+  try {
+    const result = await pool.query(
+      `SELECT b.naslov, b.tekst, b.slika, u.ime as "autorIme"
+       FROM blogovi b
+       JOIN users u ON b."userId" = u.id
+       WHERE b.id = $1`,
+      [id]
+    );
+
+    // Ako blog nije pronađen, vrati običan fajl
+    if (!result.rows[0]) {
+      return res.sendFile(path.join(__dirname, 'public', 'blog.html'));
+    }
+
+    const b = result.rows[0];
+
+    // Sanitizuj vrednosti za HTML atribute
+    const naslov = (b.naslov || 'Blog – LokalniPlodovi')
+                     .replace(/&/g, '&amp;')
+                     .replace(/"/g, '&quot;')
+                     .replace(/</g, '&lt;')
+                     .replace(/>/g, '&gt;');
+
+    const opis = (b.tekst || '')
+                   .substring(0, 160)
+                   .replace(/\n/g, ' ')
+                   .replace(/&/g, '&amp;')
+                   .replace(/"/g, '&quot;')
+                   .replace(/</g, '&lt;')
+                   .replace(/>/g, '&gt;');
+
+    const slika   = b.slika || 'https://lokalniplodovi.rs/og-slika.jpg';
+    const blogUrl = `https://lokalniplodovi.rs/blog.html?id=${id}`;
+
+    // Učitaj HTML fajl kao string
+    let html = fs.readFileSync(path.join(__dirname, 'public', 'blog.html'), 'utf8');
+
+    // Zameni statičke meta tagove sa dinamičkim vrednostima
+    html = html
+      .replace(
+        /<title id="page-title">.*?<\/title>/,
+        `<title id="page-title">${naslov} – LokalniPlodovi</title>`
+      )
+      .replace(
+        /(<meta property="og:title"[^>]*content=")[^"]*(")/,
+        `$1${naslov}$2`
+      )
+      .replace(
+        /(<meta property="og:description"[^>]*content=")[^"]*(")/,
+        `$1${opis}$2`
+      )
+      .replace(
+        /(<meta property="og:url"[^>]*content=")[^"]*(")/,
+        `$1${blogUrl}$2`
+      )
+      .replace(
+        /(<meta property="og:image"[^>]*content=")[^"]*(")/,
+        `$1${slika}$2`
+      )
+      .replace(
+        /(<meta name="description"[^>]*content=")[^"]*(")/,
+        `$1${opis}$2`
+      );
+
+    res.setHeader('Content-Type', 'text/html; charset=utf-8');
+    res.send(html);
+
+  } catch (err) {
+    console.error('SSR greška za blog.html:', err);
+    res.sendFile(path.join(__dirname, 'public', 'blog.html'));
+  }
+});
+// ======================================================
+
 // ===== OG META TAGOVI ZA FACEBOOK SHARE =====
 app.get('/blog-share/:id', async (req, res) => {
   try {

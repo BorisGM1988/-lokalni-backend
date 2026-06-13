@@ -274,12 +274,11 @@ app.get('/blog-share/:id', async (req, res) => {
   <meta name="twitter:title" content="${naslov}">
   <meta name="twitter:description" content="${opis}">
   <meta name="twitter:image" content="${slika}">
-  <meta http-equiv="refresh" content="0;url=${url}">
   <title>${naslov} – LokalniPlodovi</title>
 </head>
 <body>
   <p>Preusmeravanje na blog post...</p>
-  <script>window.location.href='${url}';</script>
+ 
 </body>
 </html>`);
   } catch (err) {

@@ -722,6 +722,23 @@ app.delete('/admin/proizvod/:id', adminAuth, async (req, res) => {
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
+app.put('/admin/proizvod/:id', adminAuth, async (req, res) => {
+  const { naziv, cena, kolicina, glavnaNisa, podnisa, opis } = req.body;
+  if (!naziv || cena === undefined || kolicina === undefined || !glavnaNisa) {
+    return res.status(400).json({ error: 'Naziv, cena, količina i niša su obavezni' });
+  }
+  try {
+    const check = await pool.query('SELECT id FROM proizvodi WHERE id = $1', [req.params.id]);
+    if (!check.rows[0]) return res.status(404).json({ error: 'Proizvod nije pronađen' });
+    const podnisaFinal = (podnisa && String(podnisa).trim()) ? String(podnisa).trim() : glavnaNisa;
+    await pool.query(
+      `UPDATE proizvodi SET naziv=$1, cena=$2, kolicina=$3, "glavnaNisa"=$4, podnisa=$5, opis=$6 WHERE id=$7`,
+      [naziv, cena, kolicina, glavnaNisa, podnisaFinal, opis || null, req.params.id]
+    );
+    res.json({ message: 'Proizvod uspešno izmenjen!' });
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
 app.post('/admin/set-koordinate/:id', adminAuth, async (req, res) => {
   const { lat, lng } = req.body;
   try {

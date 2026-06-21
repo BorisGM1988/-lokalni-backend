@@ -73,7 +73,7 @@ app.use((req, res, next) => {
   next();
 });
 
-app.use(express.json({ limit: '50mb' }));
+app.use(express.json({ limit: '2mb' }));
 
 function normalizeText(str) {
   if (!str) return '';
@@ -148,6 +148,14 @@ async function initDB() {
 }
 
 initDB();
+
+// ===== DRŽI KONEKCIJU KA BAZI "TOPLOM" (zamena za stari front-end wake-up fetch) =====
+// Sprečava cold-start kašnjenje na prvi upit posle perioda neaktivnosti.
+// Ovo je interni upit ka bazi - ne ide preko javne mreže, ne računa se kao Network Egress.
+setInterval(() => {
+  pool.query('SELECT 1').catch(() => {});
+}, 4 * 60 * 1000); // svaka 4 minuta
+// ======================================================================================
 
 const JWT_SECRET = process.env.JWT_SECRET || 'promeni-ovo-u-dug-random-string-za-produkciju-2026';
 

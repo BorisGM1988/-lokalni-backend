@@ -149,13 +149,9 @@ async function initDB() {
 
 initDB();
 
-// ===== DRŽI KONEKCIJU KA BAZI "TOPLOM" (zamena za stari front-end wake-up fetch) =====
-// Sprečava cold-start kašnjenje na prvi upit posle perioda neaktivnosti.
-// Ovo je interni upit ka bazi - ne ide preko javne mreže, ne računa se kao Network Egress.
 setInterval(() => {
   pool.query('SELECT 1').catch(() => {});
-}, 4 * 60 * 1000); // svaka 4 minuta
-// ======================================================================================
+}, 4 * 60 * 1000);
 
 const JWT_SECRET = process.env.JWT_SECRET || 'promeni-ovo-u-dug-random-string-za-produkciju-2026';
 
@@ -163,149 +159,68 @@ app.get('/test', (req, res) => {
   res.send('Backend radi! Trenutno vreme: ' + new Date().toISOString());
 });
 
-// ===== SSR ZA BLOG.HTML — Facebook OG meta tagovi =====
+// ===== SSR ZA BLOG.HTML =====
 const fs = require('fs');
 const path = require('path');
 
 app.get('/blog.html', async (req, res) => {
   const id = req.query.id;
-
-  // Bez ?id= parametra — vrati običan statički fajl
-  if (!id) {
-    return res.sendFile(path.join(__dirname, 'public', 'blog.html'));
-  }
-
+  if (!id) return res.sendFile(path.join(__dirname, 'public', 'blog.html'));
   try {
     const result = await pool.query(
-      `SELECT b.naslov, b.tekst, b.slika, u.ime as "autorIme"
-       FROM blogovi b
-       JOIN users u ON b."userId" = u.id
-       WHERE b.id = $1`,
+      `SELECT b.naslov, b.tekst, b.slika, u.ime as "autorIme" FROM blogovi b JOIN users u ON b."userId" = u.id WHERE b.id = $1`,
       [id]
     );
-
-    // Ako blog nije pronađen, vrati običan fajl
-    if (!result.rows[0]) {
-      return res.sendFile(path.join(__dirname, 'public', 'blog.html'));
-    }
-
+    if (!result.rows[0]) return res.sendFile(path.join(__dirname, 'public', 'blog.html'));
     const b = result.rows[0];
-
-    // Sanitizuj vrednosti za HTML atribute
-    const naslov = (b.naslov || 'Blog – LokalniPlodovi')
-                     .replace(/&/g, '&amp;')
-                     .replace(/"/g, '&quot;')
-                     .replace(/</g, '&lt;')
-                     .replace(/>/g, '&gt;');
-
-    const opis = (b.tekst || '')
-                   .substring(0, 160)
-                   .replace(/\n/g, ' ')
-                   .replace(/&/g, '&amp;')
-                   .replace(/"/g, '&quot;')
-                   .replace(/</g, '&lt;')
-                   .replace(/>/g, '&gt;');
-
-    const slika   = b.slika || 'https://lokalniplodovi.rs/og-slika.jpg';
+    const naslov = (b.naslov || 'Blog – LokalniPlodovi').replace(/&/g, '&amp;').replace(/"/g, '&quot;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+    const opis = (b.tekst || '').substring(0, 160).replace(/\n/g, ' ').replace(/&/g, '&amp;').replace(/"/g, '&quot;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+    const slika = b.slika || 'https://lokalniplodovi.rs/og-slika.jpg';
     const blogUrl = `https://lokalniplodovi.rs/blog.html?id=${id}`;
-
-    // Učitaj HTML fajl kao string
     let html = fs.readFileSync(path.join(__dirname, 'public', 'blog.html'), 'utf8');
-
-    // Zameni statičke meta tagove sa dinamičkim vrednostima
     html = html
-      .replace(
-        /<title id="page-title">.*?<\/title>/,
-        `<title id="page-title">${naslov} – LokalniPlodovi</title>`
-      )
-      .replace(
-        /(<meta property="og:title"[^>]*content=")[^"]*(")/,
-        `$1${naslov}$2`
-      )
-      .replace(
-        /(<meta property="og:description"[^>]*content=")[^"]*(")/,
-        `$1${opis}$2`
-      )
-      .replace(
-        /(<meta property="og:url"[^>]*content=")[^"]*(")/,
-        `$1${blogUrl}$2`
-      )
-      .replace(
-        /(<meta property="og:image"[^>]*content=")[^"]*(")/,
-        `$1${slika}$2`
-      )
-      .replace(
-        /(<meta name="description"[^>]*content=")[^"]*(")/,
-        `$1${opis}$2`
-      );
-
+      .replace(/<title id="page-title">.*?<\/title>/, `<title id="page-title">${naslov} – LokalniPlodovi</title>`)
+      .replace(/(<meta property="og:title"[^>]*content=")[^"]*(")/,`$1${naslov}$2`)
+      .replace(/(<meta property="og:description"[^>]*content=")[^"]*(")/,`$1${opis}$2`)
+      .replace(/(<meta property="og:url"[^>]*content=")[^"]*(")/,`$1${blogUrl}$2`)
+      .replace(/(<meta property="og:image"[^>]*content=")[^"]*(")/,`$1${slika}$2`)
+      .replace(/(<meta name="description"[^>]*content=")[^"]*(")/,`$1${opis}$2`);
     res.setHeader('Content-Type', 'text/html; charset=utf-8');
     res.send(html);
-
   } catch (err) {
     console.error('SSR greška za blog.html:', err);
     res.sendFile(path.join(__dirname, 'public', 'blog.html'));
   }
 });
-// ======================================================
 
 // ===== OG META TAGOVI ZA FACEBOOK SHARE =====
 app.get('/blog-share/:id', async (req, res) => {
   try {
     const result = await pool.query(
-      `SELECT b.naslov, b.tekst, b.slika, u.ime as "autorIme"
-       FROM blogovi b JOIN users u ON b."userId" = u.id
-       WHERE b.id = $1`,
+      `SELECT b.naslov, b.tekst, b.slika, u.ime as "autorIme" FROM blogovi b JOIN users u ON b."userId" = u.id WHERE b.id = $1`,
       [req.params.id]
     );
     if (!result.rows[0]) return res.status(404).send('Blog nije pronađen');
-
     const b = result.rows[0];
     const naslov = b.naslov.replace(/"/g, '&quot;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
     const opis = b.tekst.substring(0, 160).replace(/\n/g, ' ').replace(/"/g, '&quot;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
     const slika = b.slika || 'https://lokalniplodovi.rs/og-slika.jpg';
     const url = `https://lokalniplodovi.rs/blog.html?id=${req.params.id}`;
-
     res.setHeader('Content-Type', 'text/html; charset=utf-8');
-    res.send(`<!DOCTYPE html>
-<html lang="sr">
-<head>
-  <meta charset="UTF-8">
-  <meta property="og:title" content="${naslov}">
-  <meta property="og:description" content="${opis}">
-  <meta property="og:image" content="${slika}">
-  <meta property="og:url" content="${url}">
-  <meta property="og:type" content="article">
-  <meta property="og:site_name" content="LokalniPlodovi">
-  <meta property="og:locale" content="sr_RS">
-  <meta name="twitter:card" content="summary_large_image">
-  <meta name="twitter:title" content="${naslov}">
-  <meta name="twitter:description" content="${opis}">
-  <meta name="twitter:image" content="${slika}">
-  <title>${naslov} – LokalniPlodovi</title>
-</head>
-<body>
-  <p>Preusmeravanje na blog post...</p>
- <script>window.location.href='${url}';</script>
-</body>
-</html>`);
+    res.send(`<!DOCTYPE html><html lang="sr"><head><meta charset="UTF-8"><meta property="og:title" content="${naslov}"><meta property="og:description" content="${opis}"><meta property="og:image" content="${slika}"><meta property="og:url" content="${url}"><meta property="og:type" content="article"><meta property="og:site_name" content="LokalniPlodovi"><meta property="og:locale" content="sr_RS"><meta name="twitter:card" content="summary_large_image"><meta name="twitter:title" content="${naslov}"><meta name="twitter:description" content="${opis}"><meta name="twitter:image" content="${slika}"><title>${naslov} – LokalniPlodovi</title></head><body><p>Preusmeravanje na blog post...</p><script>window.location.href='${url}';</script></body></html>`);
   } catch (err) {
     console.error('Blog share greška:', err);
     res.status(500).send('Greška na serveru');
   }
 });
-// =============================================
 
 // ===== USERNAME RUTE =====
-
 app.get('/p/:username', async (req, res) => {
   try {
     const result = await pool.query(`SELECT id FROM users WHERE username = $1`, [req.params.username]);
     if (!result.rows[0]) return res.status(404).send('Profil nije pronađen');
     res.redirect(`https://lokalniplodovi.rs/moj-profil.html?userId=${result.rows[0].id}`);
-  } catch (err) {
-    res.status(500).send('Greška na serveru');
-  }
+  } catch (err) { res.status(500).send('Greška na serveru'); }
 });
 
 app.post('/profile/username', async (req, res) => {
@@ -315,12 +230,8 @@ app.post('/profile/username', async (req, res) => {
     const decoded = jwt.verify(token, JWT_SECRET);
     const { username } = req.body;
     if (!username) return res.status(400).json({ error: 'Username je obavezan' });
-    if (!/^[a-z0-9\-_]+$/.test(username)) {
-      return res.status(400).json({ error: 'Username sme da sadrži samo mala slova, brojeve, - i _' });
-    }
-    if (username.length < 3 || username.length > 30) {
-      return res.status(400).json({ error: 'Username mora biti između 3 i 30 karaktera' });
-    }
+    if (!/^[a-z0-9\-_]+$/.test(username)) return res.status(400).json({ error: 'Username sme da sadrži samo mala slova, brojeve, - i _' });
+    if (username.length < 3 || username.length > 30) return res.status(400).json({ error: 'Username mora biti između 3 i 30 karaktera' });
     await pool.query(`UPDATE users SET username = $1 WHERE id = $2`, [username, decoded.userId]);
     res.json({ message: 'Username uspešno postavljen!', link: `https://lokalniplodovi.rs/p/${username}` });
   } catch (err) {
@@ -333,18 +244,32 @@ app.get('/profile/username/provjeri/:username', async (req, res) => {
   try {
     const result = await pool.query(`SELECT id FROM users WHERE username = $1`, [req.params.username]);
     res.json({ slobodan: result.rows.length === 0 });
-  } catch (err) {
-    res.status(500).json({ error: err.message });
-  }
+  } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
-// ===== KRAJ USERNAME RUTA =====
+// ===== RANDOM PROIZVODI ZA TRAKU =====
+app.get('/random-proizvodi', async (req, res) => {
+  try {
+    const result = await pool.query(`
+      SELECT p.id, p.naziv, p.cena, p."glavnaNisa", p.podnisa,
+             u.id as "prodavacId", u.ime as "prodavacIme", u.lokacija as "prodavacLokacija"
+      FROM proizvodi p
+      JOIN users u ON p."userId" = u.id
+      WHERE p.naziv IS NOT NULL AND p.cena IS NOT NULL
+      ORDER BY RANDOM()
+      LIMIT 12
+    `);
+    res.json(result.rows);
+  } catch (err) {
+    console.error('Greška pri učitavanju random proizvoda:', err);
+    res.status(500).json({ error: 'Greška na serveru' });
+  }
+});
+// =====================================
 
 app.post('/register', async (req, res) => {
   const { ime, email, lozinka, telefon, lokacija, nise, opis } = req.body;
-  if (!ime || !email || !lozinka || !telefon || !lokacija) {
-    return res.status(400).json({ error: 'Sva obavezna polja moraju biti popunjena' });
-  }
+  if (!ime || !email || !lozinka || !telefon || !lokacija) return res.status(400).json({ error: 'Sva obavezna polja moraju biti popunjena' });
   try {
     const hashedPassword = await bcrypt.hash(lozinka, 10);
     const result = await pool.query(
@@ -405,10 +330,7 @@ app.get('/profile', async (req, res) => {
   if (authHeader && authHeader.startsWith('Bearer ')) token = authHeader.split(' ')[1];
   try {
     if (userId) {
-      const result = await pool.query(
-        `SELECT id, ime, email, telefon, lokacija, opis, nise, slika, cover_slika, tip, username, created_at as "registeredAt" FROM users WHERE id = $1`,
-        [userId]
-      );
+      const result = await pool.query(`SELECT id, ime, email, telefon, lokacija, opis, nise, slika, cover_slika, tip, username, created_at as "registeredAt" FROM users WHERE id = $1`, [userId]);
       const user = result.rows[0];
       if (!user) return res.status(404).json({ error: 'Korisnik nije pronađen' });
       return res.json({ ime: user.ime, email: user.email, telefon: user.telefon, lokacija: user.lokacija, opis: user.opis || '', nise: user.nise ? JSON.parse(user.nise) : [], slika: user.slika || '', coverSlika: user.cover_slika || '', tip: user.tip || 'prodavac', username: user.username || null, registeredAt: user.registeredAt });
@@ -486,9 +408,7 @@ app.get('/moje-objave', async (req, res) => {
     const decoded = jwt.verify(token, JWT_SECRET);
     const result = await pool.query(`SELECT id, tekst, slika, video, created_at FROM objave WHERE "userId" = $1 ORDER BY created_at DESC`, [decoded.userId]);
     res.json(result.rows);
-  } catch (err) {
-    res.status(401).json({ error: 'Nevažeći token' });
-  }
+  } catch (err) { res.status(401).json({ error: 'Nevažeći token' }); }
 });
 
 app.delete('/objava/:id', async (req, res) => {
@@ -496,11 +416,10 @@ app.delete('/objava/:id', async (req, res) => {
   if (!token) return res.status(401).json({ error: 'Niste ulogovani' });
   try {
     const decoded = jwt.verify(token, JWT_SECRET);
-    const objavaId = req.params.id;
-    const check = await pool.query('SELECT "userId" FROM objave WHERE id = $1', [objavaId]);
+    const check = await pool.query('SELECT "userId" FROM objave WHERE id = $1', [req.params.id]);
     if (!check.rows[0]) return res.status(404).json({ error: 'Objava nije pronađena' });
     if (check.rows[0].userId !== decoded.userId) return res.status(403).json({ error: 'Nemate dozvolu' });
-    await pool.query('DELETE FROM objave WHERE id = $1', [objavaId]);
+    await pool.query('DELETE FROM objave WHERE id = $1', [req.params.id]);
     res.json({ message: 'Objava uspešno obrisana' });
   } catch (err) {
     console.error(err);
@@ -561,13 +480,12 @@ app.put('/proizvod/:id', async (req, res) => {
   if (!token) return res.status(401).json({ error: 'Niste ulogovani' });
   try {
     const decoded = jwt.verify(token, JWT_SECRET);
-    const proizvodId = req.params.id;
     const { naziv, cena, kolicina, opis } = req.body;
     if (!naziv || !cena || !kolicina) return res.status(400).json({ error: 'Obavezna polja nisu popunjena' });
-    const check = await pool.query('SELECT "userId" FROM proizvodi WHERE id = $1', [proizvodId]);
+    const check = await pool.query('SELECT "userId" FROM proizvodi WHERE id = $1', [req.params.id]);
     if (!check.rows[0]) return res.status(404).json({ error: 'Proizvod nije pronađen' });
     if (check.rows[0].userId !== decoded.userId) return res.status(403).json({ error: 'Nemate dozvolu' });
-    await pool.query(`UPDATE proizvodi SET naziv=$1, cena=$2, kolicina=$3, opis=$4 WHERE id=$5`, [naziv, cena, kolicina, opis || null, proizvodId]);
+    await pool.query(`UPDATE proizvodi SET naziv=$1, cena=$2, kolicina=$3, opis=$4 WHERE id=$5`, [naziv, cena, kolicina, opis || null, req.params.id]);
     res.json({ message: 'Proizvod uspešno izmenjen!' });
   } catch (err) {
     console.error(err);
@@ -580,11 +498,10 @@ app.delete('/proizvod/:id', async (req, res) => {
   if (!token) return res.status(401).json({ error: 'Niste ulogovani' });
   try {
     const decoded = jwt.verify(token, JWT_SECRET);
-    const proizvodId = req.params.id;
-    const check = await pool.query('SELECT "userId" FROM proizvodi WHERE id = $1', [proizvodId]);
+    const check = await pool.query('SELECT "userId" FROM proizvodi WHERE id = $1', [req.params.id]);
     if (!check.rows[0]) return res.status(404).json({ error: 'Proizvod nije pronađen' });
     if (check.rows[0].userId !== decoded.userId) return res.status(403).json({ error: 'Nemate dozvolu' });
-    await pool.query('DELETE FROM proizvodi WHERE id = $1', [proizvodId]);
+    await pool.query('DELETE FROM proizvodi WHERE id = $1', [req.params.id]);
     res.json({ message: 'Proizvod uspešno obrisan' });
   } catch (err) {
     console.error(err);
@@ -666,15 +583,7 @@ app.get('/admin/objave', adminAuth, async (req, res) => {
 
 app.get('/admin/ocene', adminAuth, async (req, res) => {
   try {
-    const result = await pool.query(
-      `SELECT o.*,
-        u1.ime as "odIme", u1.email as "odEmail",
-        u2.ime as "zaIme", u2.email as "zaEmail"
-       FROM ocene o
-       JOIN users u1 ON o.od_user_id = u1.id
-       JOIN users u2 ON o.za_user_id = u2.id
-       ORDER BY o.created_at DESC`
-    );
+    const result = await pool.query(`SELECT o.*, u1.ime as "odIme", u1.email as "odEmail", u2.ime as "zaIme", u2.email as "zaEmail" FROM ocene o JOIN users u1 ON o.od_user_id = u1.id JOIN users u2 ON o.za_user_id = u2.id ORDER BY o.created_at DESC`);
     res.json(result.rows);
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
@@ -695,16 +604,7 @@ app.delete('/admin/objava/:id', adminAuth, async (req, res) => {
 
 app.get('/admin/inbox-status', adminAuth, async (req, res) => {
   try {
-    const result = await pool.query(`
-      SELECT u.id, u.ime, u.email, u.tip,
-        COUNT(p.id) as ukupno_poruka,
-        COUNT(CASE WHEN p.procitano = FALSE THEN 1 END) as neprocitane
-      FROM users u
-      LEFT JOIN poruke p ON p.ka_user_id = u.id
-      GROUP BY u.id, u.ime, u.email, u.tip
-      HAVING COUNT(p.id) > 0
-      ORDER BY neprocitane DESC, ukupno_poruka DESC
-    `);
+    const result = await pool.query(`SELECT u.id, u.ime, u.email, u.tip, COUNT(p.id) as ukupno_poruka, COUNT(CASE WHEN p.procitano = FALSE THEN 1 END) as neprocitane FROM users u LEFT JOIN poruke p ON p.ka_user_id = u.id GROUP BY u.id, u.ime, u.email, u.tip HAVING COUNT(p.id) > 0 ORDER BY neprocitane DESC, ukupno_poruka DESC`);
     res.json(result.rows);
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
@@ -732,17 +632,12 @@ app.delete('/admin/proizvod/:id', adminAuth, async (req, res) => {
 
 app.put('/admin/proizvod/:id', adminAuth, async (req, res) => {
   const { naziv, cena, kolicina, glavnaNisa, podnisa, opis } = req.body;
-  if (!naziv || cena === undefined || kolicina === undefined || !glavnaNisa) {
-    return res.status(400).json({ error: 'Naziv, cena, količina i niša su obavezni' });
-  }
+  if (!naziv || cena === undefined || kolicina === undefined || !glavnaNisa) return res.status(400).json({ error: 'Naziv, cena, količina i niša su obavezni' });
   try {
     const check = await pool.query('SELECT id FROM proizvodi WHERE id = $1', [req.params.id]);
     if (!check.rows[0]) return res.status(404).json({ error: 'Proizvod nije pronađen' });
     const podnisaFinal = (podnisa && String(podnisa).trim()) ? String(podnisa).trim() : glavnaNisa;
-    await pool.query(
-      `UPDATE proizvodi SET naziv=$1, cena=$2, kolicina=$3, "glavnaNisa"=$4, podnisa=$5, opis=$6 WHERE id=$7`,
-      [naziv, cena, kolicina, glavnaNisa, podnisaFinal, opis || null, req.params.id]
-    );
+    await pool.query(`UPDATE proizvodi SET naziv=$1, cena=$2, kolicina=$3, "glavnaNisa"=$4, podnisa=$5, opis=$6 WHERE id=$7`, [naziv, cena, kolicina, glavnaNisa, podnisaFinal, opis || null, req.params.id]);
     res.json({ message: 'Proizvod uspešno izmenjen!' });
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
@@ -785,11 +680,7 @@ app.post('/admin/grupni-email', adminAuth, async (req, res) => {
 // ===== ADMIN BLOG =====
 app.get('/admin/blogovi', adminAuth, async (req, res) => {
   try {
-    const result = await pool.query(
-      `SELECT b.*, u.ime as "autorIme", u.email as "autorEmail"
-       FROM blogovi b JOIN users u ON b."userId" = u.id
-       ORDER BY b.created_at DESC`
-    );
+    const result = await pool.query(`SELECT b.*, u.ime as "autorIme", u.email as "autorEmail" FROM blogovi b JOIN users u ON b."userId" = u.id ORDER BY b.created_at DESC`);
     res.json(result.rows);
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
@@ -800,7 +691,6 @@ app.delete('/admin/blog/:id', adminAuth, async (req, res) => {
     res.json({ message: 'Blog obrisan' });
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
-// =====================
 
 app.get('/objave/:userId', async (req, res) => {
   try {
@@ -817,23 +707,14 @@ app.post('/poruka', async (req, res) => {
     const { ka_user_id, tekst } = req.body;
     if (!tekst || !ka_user_id) return res.status(400).json({ error: 'Nedostaju podaci' });
     if (decoded.userId === parseInt(ka_user_id)) return res.status(400).json({ error: 'Ne možete pisati sebi' });
-    const result = await pool.query(
-      `INSERT INTO poruke (od_user_id, ka_user_id, tekst) VALUES ($1, $2, $3) RETURNING id`,
-      [decoded.userId, ka_user_id, tekst.trim()]
-    );
+    const result = await pool.query(`INSERT INTO poruke (od_user_id, ka_user_id, tekst) VALUES ($1, $2, $3) RETURNING id`, [decoded.userId, ka_user_id, tekst.trim()]);
     const primalac = await pool.query('SELECT ime, email FROM users WHERE id = $1', [ka_user_id]);
     const posiljalac = await pool.query('SELECT ime FROM users WHERE id = $1', [decoded.userId]);
     if (primalac.rows[0] && primalac.rows[0].email) {
-      posaljiEmailNotifikaciju(
-        primalac.rows[0].email,
-        primalac.rows[0].ime,
-        posiljalac.rows[0]?.ime || 'Korisnik'
-      ).catch(e => console.error('Email async greška:', e.message));
+      posaljiEmailNotifikaciju(primalac.rows[0].email, primalac.rows[0].ime, posiljalac.rows[0]?.ime || 'Korisnik').catch(e => console.error('Email async greška:', e.message));
     }
     res.json({ message: 'Poruka poslata!', id: result.rows[0].id });
-  } catch (err) {
-    res.status(500).json({ error: err.message });
-  }
+  } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
 app.get('/inbox', async (req, res) => {
@@ -841,10 +722,7 @@ app.get('/inbox', async (req, res) => {
   if (!token) return res.status(401).json({ error: 'Niste ulogovani' });
   try {
     const decoded = jwt.verify(token, JWT_SECRET);
-    const result = await pool.query(
-      `SELECT p.*, u.ime as "odIme", u.slika as "odSlika" FROM poruke p JOIN users u ON p.od_user_id = u.id WHERE p.ka_user_id = $1 ORDER BY p.created_at DESC`,
-      [decoded.userId]
-    );
+    const result = await pool.query(`SELECT p.*, u.ime as "odIme", u.slika as "odSlika" FROM poruke p JOIN users u ON p.od_user_id = u.id WHERE p.ka_user_id = $1 ORDER BY p.created_at DESC`, [decoded.userId]);
     res.json(result.rows);
   } catch (err) { res.status(401).json({ error: 'Nevažeći token' }); }
 });
@@ -854,10 +732,7 @@ app.get('/inbox/broj', async (req, res) => {
   if (!token) return res.status(401).json({ error: 'Niste ulogovani' });
   try {
     const decoded = jwt.verify(token, JWT_SECRET);
-    const result = await pool.query(
-      `SELECT COUNT(*) FROM poruke WHERE ka_user_id = $1 AND procitano = FALSE`,
-      [decoded.userId]
-    );
+    const result = await pool.query(`SELECT COUNT(*) FROM poruke WHERE ka_user_id = $1 AND procitano = FALSE`, [decoded.userId]);
     res.json({ broj: parseInt(result.rows[0].count) });
   } catch (err) { res.status(401).json({ error: 'Nevažeći token' }); }
 });
@@ -870,23 +745,13 @@ app.get('/konverzacija/:drugUserId', async (req, res) => {
     const mojId = decoded.userId;
     const drugId = parseInt(req.params.drugUserId);
     const result = await pool.query(
-      `SELECT p.*, u_od.ime as "odIme", u_od.slika as "odSlika", u_ka.ime as "kaIme"
-       FROM poruke p
-       JOIN users u_od ON p.od_user_id = u_od.id
-       JOIN users u_ka ON p.ka_user_id = u_ka.id
-       WHERE (p.od_user_id = $1 AND p.ka_user_id = $2) OR (p.od_user_id = $2 AND p.ka_user_id = $1)
-       ORDER BY p.created_at ASC`,
+      `SELECT p.*, u_od.ime as "odIme", u_od.slika as "odSlika", u_ka.ime as "kaIme" FROM poruke p JOIN users u_od ON p.od_user_id = u_od.id JOIN users u_ka ON p.ka_user_id = u_ka.id WHERE (p.od_user_id = $1 AND p.ka_user_id = $2) OR (p.od_user_id = $2 AND p.ka_user_id = $1) ORDER BY p.created_at ASC`,
       [mojId, drugId]
     );
-    await pool.query(
-      `UPDATE poruke SET procitano = TRUE WHERE ka_user_id = $1 AND od_user_id = $2 AND procitano = FALSE`,
-      [mojId, drugId]
-    );
+    await pool.query(`UPDATE poruke SET procitano = TRUE WHERE ka_user_id = $1 AND od_user_id = $2 AND procitano = FALSE`, [mojId, drugId]);
     const drug = await pool.query(`SELECT id, ime, slika FROM users WHERE id = $1`, [drugId]);
     res.json({ poruke: result.rows, drug: drug.rows[0] || null });
-  } catch (err) {
-    res.status(500).json({ error: err.message });
-  }
+  } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
 app.get('/konverzacije', async (req, res) => {
@@ -896,30 +761,12 @@ app.get('/konverzacije', async (req, res) => {
     const decoded = jwt.verify(token, JWT_SECRET);
     const mojId = decoded.userId;
     const result = await pool.query(
-      `SELECT DISTINCT ON (drug_id)
-        drug_id, drug_ime, drug_slika, poslednja_poruka, poslednje_vreme, neprocitane
-       FROM (
-         SELECT
-           CASE WHEN p.od_user_id = $1 THEN p.ka_user_id ELSE p.od_user_id END as drug_id,
-           CASE WHEN p.od_user_id = $1 THEN u_ka.ime ELSE u_od.ime END as drug_ime,
-           CASE WHEN p.od_user_id = $1 THEN u_ka.slika ELSE u_od.slika END as drug_slika,
-           p.tekst as poslednja_poruka,
-           p.created_at as poslednje_vreme,
-           (SELECT COUNT(*) FROM poruke p2 WHERE p2.od_user_id = CASE WHEN p.od_user_id = $1 THEN p.ka_user_id ELSE p.od_user_id END AND p2.ka_user_id = $1 AND p2.procitano = FALSE) as neprocitane
-         FROM poruke p
-         JOIN users u_od ON p.od_user_id = u_od.id
-         JOIN users u_ka ON p.ka_user_id = u_ka.id
-         WHERE p.od_user_id = $1 OR p.ka_user_id = $1
-         ORDER BY p.created_at DESC
-       ) sub
-       ORDER BY drug_id, poslednje_vreme DESC`,
+      `SELECT DISTINCT ON (drug_id) drug_id, drug_ime, drug_slika, poslednja_poruka, poslednje_vreme, neprocitane FROM (SELECT CASE WHEN p.od_user_id = $1 THEN p.ka_user_id ELSE p.od_user_id END as drug_id, CASE WHEN p.od_user_id = $1 THEN u_ka.ime ELSE u_od.ime END as drug_ime, CASE WHEN p.od_user_id = $1 THEN u_ka.slika ELSE u_od.slika END as drug_slika, p.tekst as poslednja_poruka, p.created_at as poslednje_vreme, (SELECT COUNT(*) FROM poruke p2 WHERE p2.od_user_id = CASE WHEN p.od_user_id = $1 THEN p.ka_user_id ELSE p.od_user_id END AND p2.ka_user_id = $1 AND p2.procitano = FALSE) as neprocitane FROM poruke p JOIN users u_od ON p.od_user_id = u_od.id JOIN users u_ka ON p.ka_user_id = u_ka.id WHERE p.od_user_id = $1 OR p.ka_user_id = $1 ORDER BY p.created_at DESC) sub ORDER BY drug_id, poslednje_vreme DESC`,
       [mojId]
     );
     const sortirano = result.rows.sort((a, b) => new Date(b.poslednje_vreme) - new Date(a.poslednje_vreme));
     res.json(sortirano);
-  } catch (err) {
-    res.status(500).json({ error: err.message });
-  }
+  } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
 app.put('/poruka/:id/procitano', async (req, res) => {
@@ -957,20 +804,14 @@ app.post('/ocena', async (req, res) => {
     if (razlikaDana < 7) return res.status(403).json({ error: 'Vaš nalog mora biti star najmanje 7 dana da biste mogli da ocenjujete.' });
     const porukaCheck = await pool.query('SELECT id FROM poruke WHERE od_user_id = $1 AND ka_user_id = $2 LIMIT 1', [decoded.userId, za_user_id]);
     if (porukaCheck.rows.length === 0) return res.status(403).json({ error: 'Možete oceniti samo prodavce sa kojima ste stupili u kontakt putem poruke.' });
-    await pool.query(
-      `INSERT INTO ocene (od_user_id, za_user_id, ocena, komentar) VALUES ($1, $2, $3, $4) ON CONFLICT (od_user_id, za_user_id) DO UPDATE SET ocena = $3, komentar = $4, created_at = CURRENT_TIMESTAMP`,
-      [decoded.userId, za_user_id, ocena, komentar || null]
-    );
+    await pool.query(`INSERT INTO ocene (od_user_id, za_user_id, ocena, komentar) VALUES ($1, $2, $3, $4) ON CONFLICT (od_user_id, za_user_id) DO UPDATE SET ocena = $3, komentar = $4, created_at = CURRENT_TIMESTAMP`, [decoded.userId, za_user_id, ocena, komentar || null]);
     res.json({ message: 'Ocena uspešno dodata!' });
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
 app.get('/ocene/:userId', async (req, res) => {
   try {
-    const result = await pool.query(
-      `SELECT o.*, u.ime as "odIme", u.slika as "odSlika" FROM ocene o JOIN users u ON o.od_user_id = u.id WHERE o.za_user_id = $1 ORDER BY o.created_at DESC`,
-      [req.params.userId]
-    );
+    const result = await pool.query(`SELECT o.*, u.ime as "odIme", u.slika as "odSlika" FROM ocene o JOIN users u ON o.od_user_id = u.id WHERE o.za_user_id = $1 ORDER BY o.created_at DESC`, [req.params.userId]);
     const prosek = result.rows.length > 0 ? (result.rows.reduce((sum, r) => sum + r.ocena, 0) / result.rows.length).toFixed(1) : null;
     res.json({ ocene: result.rows, prosek, ukupno: result.rows.length });
   } catch (err) { res.status(500).json({ error: err.message }); }
@@ -1013,10 +854,7 @@ app.get('/lista-zelja', async (req, res) => {
   if (!token) return res.status(401).json({ error: 'Niste ulogovani' });
   try {
     const decoded = jwt.verify(token, JWT_SECRET);
-    const result = await pool.query(
-      `SELECT p.*, u.ime as "prodavacIme", lz.created_at as "dodato" FROM lista_zelja lz JOIN proizvodi p ON lz.proizvod_id = p.id JOIN users u ON p."userId" = u.id WHERE lz.user_id = $1 ORDER BY lz.created_at DESC`,
-      [decoded.userId]
-    );
+    const result = await pool.query(`SELECT p.*, u.ime as "prodavacIme", lz.created_at as "dodato" FROM lista_zelja lz JOIN proizvodi p ON lz.proizvod_id = p.id JOIN users u ON p."userId" = u.id WHERE lz.user_id = $1 ORDER BY lz.created_at DESC`, [decoded.userId]);
     res.json(result.rows);
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
@@ -1031,11 +869,7 @@ app.get('/lista-zelja/provjeri/:proizvod_id', async (req, res) => {
   } catch (err) { res.json({ uListi: false }); }
 });
 
-// ===================================================
-// BLOG RUTE
-// ===================================================
-
-// Dodaj blog post
+// ===== BLOG RUTE =====
 app.post('/blog', async (req, res) => {
   const token = req.headers.authorization?.split(' ')[1];
   if (!token) return res.status(401).json({ error: 'Niste ulogovani' });
@@ -1045,10 +879,7 @@ app.post('/blog', async (req, res) => {
     if (!naslov || !naslov.trim()) return res.status(400).json({ error: 'Naslov je obavezan' });
     if (!tekst || !tekst.trim()) return res.status(400).json({ error: 'Tekst bloga je obavezan' });
     const slikaUrl = await uploadSlika(slikaBase64);
-    const result = await pool.query(
-      `INSERT INTO blogovi ("userId", naslov, tekst, slika, video) VALUES ($1, $2, $3, $4, $5) RETURNING id`,
-      [decoded.userId, naslov.trim(), tekst.trim(), slikaUrl || null, videoUrl || null]
-    );
+    const result = await pool.query(`INSERT INTO blogovi ("userId", naslov, tekst, slika, video) VALUES ($1, $2, $3, $4, $5) RETURNING id`, [decoded.userId, naslov.trim(), tekst.trim(), slikaUrl || null, videoUrl || null]);
     res.json({ message: 'Blog uspešno objavljen!', blogId: result.rows[0].id });
   } catch (err) {
     console.error(err);
@@ -1056,18 +887,11 @@ app.post('/blog', async (req, res) => {
   }
 });
 
-// Svi blog postovi
 app.get('/blogovi', async (req, res) => {
   try {
     const { userId, limit, offset } = req.query;
-    let sql = `
-      SELECT b.*, u.ime as "autorIme", u.slika as "autorSlika", u.lokacija as "autorLokacija"
-      FROM blogovi b
-      JOIN users u ON b."userId" = u.id
-      WHERE 1=1
-    `;
-    const params = [];
-    let i = 1;
+    let sql = `SELECT b.*, u.ime as "autorIme", u.slika as "autorSlika", u.lokacija as "autorLokacija" FROM blogovi b JOIN users u ON b."userId" = u.id WHERE 1=1`;
+    const params = []; let i = 1;
     if (userId) { sql += ` AND b."userId" = $${i++}`; params.push(userId); }
     sql += ` ORDER BY b.created_at DESC`;
     if (limit) { sql += ` LIMIT $${i++}`; params.push(parseInt(limit)); }
@@ -1080,24 +904,14 @@ app.get('/blogovi', async (req, res) => {
   }
 });
 
-// Jedan blog post
 app.get('/blog/:id', async (req, res) => {
   try {
-    const result = await pool.query(
-      `SELECT b.*, u.ime as "autorIme", u.slika as "autorSlika", u.lokacija as "autorLokacija", u.username as "autorUsername", u.id as "autorId"
-       FROM blogovi b
-       JOIN users u ON b."userId" = u.id
-       WHERE b.id = $1`,
-      [req.params.id]
-    );
+    const result = await pool.query(`SELECT b.*, u.ime as "autorIme", u.slika as "autorSlika", u.lokacija as "autorLokacija", u.username as "autorUsername", u.id as "autorId" FROM blogovi b JOIN users u ON b."userId" = u.id WHERE b.id = $1`, [req.params.id]);
     if (!result.rows[0]) return res.status(404).json({ error: 'Blog nije pronađen' });
     res.json(result.rows[0]);
-  } catch (err) {
-    res.status(500).json({ error: 'Greška na serveru' });
-  }
+  } catch (err) { res.status(500).json({ error: 'Greška na serveru' }); }
 });
 
-// Obriši blog post
 app.delete('/blog/:id', async (req, res) => {
   const token = req.headers.authorization?.split(' ')[1];
   if (!token) return res.status(401).json({ error: 'Niste ulogovani' });
@@ -1108,12 +922,8 @@ app.delete('/blog/:id', async (req, res) => {
     if (check.rows[0].userId !== decoded.userId) return res.status(403).json({ error: 'Nemate dozvolu' });
     await pool.query('DELETE FROM blogovi WHERE id = $1', [req.params.id]);
     res.json({ message: 'Blog uspešno obrisan' });
-  } catch (err) {
-    res.status(500).json({ error: 'Greška pri brisanju' });
-  }
+  } catch (err) { res.status(500).json({ error: 'Greška pri brisanju' }); }
 });
-
-// ===================================================
 
 const port = process.env.PORT || 3000;
 app.listen(port, () => {

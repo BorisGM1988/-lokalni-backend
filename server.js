@@ -116,6 +116,7 @@ async function initDB() {
     await pool.query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS cover_slika TEXT`);
     await pool.query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS tip TEXT DEFAULT 'prodavac'`);
     await pool.query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS username TEXT UNIQUE`);
+    await pool.query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS aktivan BOOLEAN DEFAULT true`);
     await pool.query(`CREATE TABLE IF NOT EXISTS proizvodi (id SERIAL PRIMARY KEY, "userId" INTEGER, naziv TEXT, opis TEXT, cena NUMERIC, kolicina NUMERIC, "glavnaNisa" TEXT, podnisa TEXT, created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP)`);
     await pool.query(`ALTER TABLE proizvodi ADD COLUMN IF NOT EXISTS slika TEXT`);
     await pool.query(`CREATE TABLE IF NOT EXISTS objave (id SERIAL PRIMARY KEY, "userId" INTEGER NOT NULL, tekst TEXT NOT NULL, slika TEXT, created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP)`);
@@ -330,17 +331,17 @@ app.get('/profile', async (req, res) => {
   if (authHeader && authHeader.startsWith('Bearer ')) token = authHeader.split(' ')[1];
   try {
     if (userId) {
-      const result = await pool.query(`SELECT id, ime, email, telefon, lokacija, opis, nise, slika, cover_slika, tip, username, created_at as "registeredAt" FROM users WHERE id = $1`, [userId]);
+      const result = await pool.query(`SELECT id, ime, email, telefon, lokacija, opis, nise, slika, cover_slika, tip, username, aktivan, created_at as "registeredAt" FROM users WHERE id = $1`, [userId]);
       const user = result.rows[0];
       if (!user) return res.status(404).json({ error: 'Korisnik nije pronađen' });
-      return res.json({ ime: user.ime, email: user.email, telefon: user.telefon, lokacija: user.lokacija, opis: user.opis || '', nise: user.nise ? JSON.parse(user.nise) : [], slika: user.slika || '', coverSlika: user.cover_slika || '', tip: user.tip || 'prodavac', username: user.username || null, registeredAt: user.registeredAt });
+      return res.json({ ime: user.ime, email: user.email, telefon: user.telefon, lokacija: user.lokacija, opis: user.opis || '', nise: user.nise ? JSON.parse(user.nise) : [], slika: user.slika || '', coverSlika: user.cover_slika || '', tip: user.tip || 'prodavac', username: user.username || null, aktivan: user.aktivan !== false, registeredAt: user.registeredAt });
     }
     if (!token) return res.status(401).json({ error: 'Niste ulogovani' });
     const decoded = jwt.verify(token, JWT_SECRET);
     const result = await pool.query('SELECT * FROM users WHERE id = $1', [decoded.userId]);
     const user = result.rows[0];
     if (!user) return res.status(404).json({ error: 'Korisnik nije pronađen' });
-    res.json({ ime: user.ime, email: user.email, telefon: user.telefon, lokacija: user.lokacija, opis: user.opis || '', nise: user.nise ? JSON.parse(user.nise) : [], slika: user.slika || '', coverSlika: user.cover_slika || '', tip: user.tip || 'prodavac', username: user.username || null });
+    res.json({ ime: user.ime, email: user.email, telefon: user.telefon, lokacija: user.lokacija, opis: user.opis || '', nise: user.nise ? JSON.parse(user.nise) : [], slika: user.slika || '', coverSlika: user.cover_slika || '', tip: user.tip || 'prodavac', username: user.username || null, aktivan: user.aktivan !== false });
   } catch (err) {
     console.error(err);
     res.status(401).json({ error: 'Nevažeći token' });
@@ -352,12 +353,13 @@ app.post('/profile/update', async (req, res) => {
   if (!token) return res.status(401).json({ error: 'Niste ulogovani' });
   try {
     const decoded = jwt.verify(token, JWT_SECRET);
-    const { ime, opis, telefon, lokacija, slikaBase64, coverSlikaBase64 } = req.body;
+    const { ime, opis, telefon, lokacija, aktivan, slikaBase64, coverSlikaBase64 } = req.body;
     const polja = []; const vrednosti = []; let i = 1;
     if (ime !== undefined)      { polja.push(`ime = $${i++}`);      vrednosti.push(ime); }
     if (opis !== undefined)     { polja.push(`opis = $${i++}`);     vrednosti.push(opis); }
     if (telefon !== undefined)  { polja.push(`telefon = $${i++}`);  vrednosti.push(telefon); }
     if (lokacija !== undefined) { polja.push(`lokacija = $${i++}`); vrednosti.push(lokacija); }
+    if (aktivan !== undefined)  { polja.push(`aktivan = $${i++}`);  vrednosti.push(aktivan); }
     if (slikaBase64 !== undefined) { const slikaUrl = await uploadSlika(slikaBase64); polja.push(`slika = $${i++}`); vrednosti.push(slikaUrl); }
     if (coverSlikaBase64 !== undefined) { const coverUrl = await uploadSlika(coverSlikaBase64); polja.push(`cover_slika = $${i++}`); vrednosti.push(coverUrl); }
     if (polja.length === 0) return res.status(400).json({ error: 'Nema podataka za izmenu' });
@@ -429,7 +431,7 @@ app.delete('/objava/:id', async (req, res) => {
 
 app.get('/svi-prodavci', async (req, res) => {
   try {
-    const result = await pool.query(`SELECT id, ime, opis, slika, lokacija, nise, username FROM users WHERE tip = 'prodavac' OR tip IS NULL ORDER BY ime ASC`);
+    const result = await pool.query(`SELECT id, ime, opis, slika, lokacija, nise, username FROM users WHERE (tip = 'prodavac' OR tip IS NULL) AND aktivan IS NOT FALSE ORDER BY ime ASC`);
     const prodavci = result.rows.map(row => {
       let niseParsed = [];
       try { niseParsed = row.nise ? JSON.parse(row.nise) : []; } catch (e) {}
@@ -466,6 +468,7 @@ app.get('/proizvodi', async (req, res) => {
     if (glavnaNisa) { sql += ` AND p."glavnaNisa" = $${i++}`; params.push(glavnaNisa); }
     if (podnisa)    { sql += ` AND LOWER(p.podnisa) = LOWER($${i++})`; params.push(podnisa); }
     if (userId)     { sql += ` AND p."userId" = $${i++}`; params.push(userId); }
+    else            { sql += ` AND u.aktivan IS NOT FALSE`; }
     sql += ` ORDER BY p.created_at DESC`;
     const result = await pool.query(sql, params);
     res.json(result.rows);
@@ -511,7 +514,7 @@ app.delete('/proizvod/:id', async (req, res) => {
 
 app.get('/prodavci-mapa', async (req, res) => {
   try {
-    const result = await pool.query(`SELECT id, ime, opis, slika, lokacija, nise, lat, lng FROM users WHERE tip = 'prodavac' OR tip IS NULL ORDER BY ime ASC`);
+    const result = await pool.query(`SELECT id, ime, opis, slika, lokacija, nise, lat, lng FROM users WHERE (tip = 'prodavac' OR tip IS NULL) AND aktivan IS NOT FALSE ORDER BY ime ASC`);
     const prodavci = [];
     for (const row of result.rows) {
       let niseParsed = [];

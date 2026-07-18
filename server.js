@@ -444,6 +444,38 @@ app.get('/svi-prodavci', async (req, res) => {
   }
 });
 
+// ===== PRETRAGA (proizvodi + prodavci) =====
+app.get('/pretraga', async (req, res) => {
+  const q = (req.query.q || '').trim();
+  if (!q) return res.json({ proizvodi: [], prodavci: [] });
+  try {
+    const proizvodiResult = await pool.query(
+      `SELECT p.*, u.ime as "prodavacIme", u.lokacija as "prodavacLokacija"
+       FROM proizvodi p JOIN users u ON p."userId" = u.id
+       WHERE p.naziv ILIKE $1 AND u.aktivan IS NOT FALSE
+       ORDER BY p.created_at DESC LIMIT 30`,
+      [`%${q}%`]
+    );
+    const prodavciResult = await pool.query(
+      `SELECT id, ime, opis, slika, lokacija, nise, username
+       FROM users
+       WHERE (tip = 'prodavac' OR tip IS NULL) AND aktivan IS NOT FALSE
+         AND (ime ILIKE $1 OR lokacija ILIKE $1)
+       ORDER BY ime ASC LIMIT 30`,
+      [`%${q}%`]
+    );
+    const prodavci = prodavciResult.rows.map(row => {
+      let niseParsed = [];
+      try { niseParsed = row.nise ? JSON.parse(row.nise) : []; } catch (e) {}
+      return { id: row.id, ime: row.ime || 'Bez imena', opis: row.opis || '', slika: row.slika || '', lokacija: row.lokacija || '', nise: niseParsed, username: row.username || null };
+    });
+    res.json({ proizvodi: proizvodiResult.rows, prodavci });
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: 'Greška pri pretrazi' });
+  }
+});
+
 app.post('/dodaj-proizvod', async (req, res) => {
   const token = req.headers.authorization?.split(' ')[1];
   if (!token) return res.status(401).json({ error: 'Niste ulogovani' });

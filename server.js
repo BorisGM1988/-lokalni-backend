@@ -685,6 +685,18 @@ app.post('/admin/set-koordinate/:id', adminAuth, async (req, res) => {
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
+// ===== ADMIN: RESET LOZINKE KORISNIKA =====
+app.post('/admin/reset-lozinka/:id', adminAuth, async (req, res) => {
+  const { novaLozinka } = req.body;
+  if (!novaLozinka || novaLozinka.length < 6) return res.status(400).json({ error: 'Nova lozinka mora imati najmanje 6 karaktera' });
+  try {
+    const hashedPassword = await bcrypt.hash(novaLozinka, 10);
+    const result = await pool.query(`UPDATE users SET password = $1 WHERE id = $2 RETURNING ime, email`, [hashedPassword, req.params.id]);
+    if (!result.rows[0]) return res.status(404).json({ error: 'Korisnik nije pronađen' });
+    res.json({ message: `Lozinka uspešno resetovana za ${result.rows[0].ime} (${result.rows[0].email})` });
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
 app.post('/admin/set-username/:id', adminAuth, async (req, res) => {
   const { username } = req.body;
   if (!username) return res.status(400).json({ error: 'Username je obavezan' });
@@ -725,6 +737,25 @@ app.delete('/admin/blog/:id', adminAuth, async (req, res) => {
     await pool.query('DELETE FROM blogovi WHERE id = $1', [req.params.id]);
     res.json({ message: 'Blog obrisan' });
   } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+// ===== OG META TAGOVI ZA DELJENJE PROFILA PRODAVCA =====
+app.get('/prodavac-share/:id', async (req, res) => {
+  try {
+    const result = await pool.query(`SELECT ime, opis, slika, lokacija FROM users WHERE id = $1`, [req.params.id]);
+    if (!result.rows[0]) return res.status(404).send('Profil nije pronađen');
+    const u = result.rows[0];
+    const ime = (u.ime || 'Prodavac').replace(/"/g, '&quot;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+    const opisOsnovni = u.opis || `Domaći proizvodi direktno sa imanja${u.lokacija ? ' — ' + u.lokacija : ''}.`;
+    const opis = opisOsnovni.substring(0, 160).replace(/\n/g, ' ').replace(/"/g, '&quot;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+    const slika = u.slika || 'https://lokalniplodovi.rs/og-slika.jpg';
+    const url = `https://lokalniplodovi.rs/moj-profil.html?userId=${req.params.id}`;
+    res.setHeader('Content-Type', 'text/html; charset=utf-8');
+    res.send(`<!DOCTYPE html><html lang="sr"><head><meta charset="UTF-8"><meta property="og:title" content="${ime} – LokalniPlodovi"><meta property="og:description" content="${opis}"><meta property="og:image" content="${slika}"><meta property="og:url" content="${url}"><meta property="og:type" content="profile"><meta property="og:site_name" content="LokalniPlodovi"><meta property="og:locale" content="sr_RS"><meta name="twitter:card" content="summary_large_image"><meta name="twitter:title" content="${ime} – LokalniPlodovi"><meta name="twitter:description" content="${opis}"><meta name="twitter:image" content="${slika}"><title>${ime} – LokalniPlodovi</title></head><body><p>Preusmeravanje na profil...</p><script>window.location.href='${url}';</script></body></html>`);
+  } catch (err) {
+    console.error('Prodavac share greška:', err);
+    res.status(500).send('Greška na serveru');
+  }
 });
 
 app.get('/objave/:userId', async (req, res) => {

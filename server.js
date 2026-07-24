@@ -387,6 +387,29 @@ app.post('/upload-video', async (req, res) => {
   }
 });
 
+// ===== PROMENA SOPSTVENE LOZINKE =====
+app.post('/promeni-lozinku', async (req, res) => {
+  const token = req.headers.authorization?.split(' ')[1];
+  if (!token) return res.status(401).json({ error: 'Niste ulogovani' });
+  try {
+    const decoded = jwt.verify(token, JWT_SECRET);
+    const { trenutnaLozinka, novaLozinka } = req.body;
+    if (!trenutnaLozinka || !novaLozinka) return res.status(400).json({ error: 'Unesite trenutnu i novu lozinku' });
+    if (novaLozinka.length < 6) return res.status(400).json({ error: 'Nova lozinka mora imati najmanje 6 karaktera' });
+    const result = await pool.query('SELECT password FROM users WHERE id = $1', [decoded.userId]);
+    const user = result.rows[0];
+    if (!user) return res.status(404).json({ error: 'Korisnik nije pronađen' });
+    const isMatch = await bcrypt.compare(trenutnaLozinka, user.password);
+    if (!isMatch) return res.status(401).json({ error: 'Trenutna lozinka nije tačna' });
+    const hashedPassword = await bcrypt.hash(novaLozinka, 10);
+    await pool.query('UPDATE users SET password = $1 WHERE id = $2', [hashedPassword, decoded.userId]);
+    res.json({ message: 'Lozinka uspešno promenjena!' });
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: 'Greška pri promeni lozinke' });
+  }
+});
+
 app.post('/objavi-novost', async (req, res) => {
   const token = req.headers.authorization?.split(' ')[1];
   if (!token) return res.status(401).json({ error: 'Niste ulogovani' });

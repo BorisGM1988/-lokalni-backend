@@ -6,6 +6,12 @@ const jwt = require('jsonwebtoken');
 const cloudinary = require('cloudinary').v2;
 const sgMail = require('@sendgrid/mail');
 sgMail.setApiKey(process.env.SENDGRID_API_KEY);
+const webpush = require('web-push');
+webpush.setVapidDetails(
+  'mailto:lokalniplodovi@gmail.com',
+  process.env.VAPID_PUBLIC_KEY,
+  process.env.VAPID_PRIVATE_KEY
+);
 
 const app = express();
 
@@ -57,6 +63,33 @@ async function posaljiGrupniEmail(emailovi, naslov, poruka) {
   return rezultati;
 }
 // ===== KRAJ SENDGRID SETUP =====
+
+// ===== PUSH NOTIFIKACIJE HELPER =====
+async function posaljiPushNotifikaciju(userId, naslov, telo, url) {
+  try {
+    const subs = await pool.query('SELECT * FROM push_subscriptions WHERE "userId" = $1', [userId]);
+    for (const sub of subs.rows) {
+      const pushConfig = {
+        endpoint: sub.endpoint,
+        keys: { p256dh: sub.p256dh, auth: sub.auth }
+      };
+      const payload = JSON.stringify({ title: naslov, body: telo, url: url || '/' });
+      try {
+        await webpush.sendNotification(pushConfig, payload);
+      } catch (err) {
+        // Ako je pretplata istekla/nevažeća, obriši je iz baze
+        if (err.statusCode === 404 || err.statusCode === 410) {
+          await pool.query('DELETE FROM push_subscriptions WHERE endpoint = $1', [sub.endpoint]);
+        } else {
+          console.error('Push greška:', err.message);
+        }
+      }
+    }
+  } catch (err) {
+    console.error('Push notifikacija greška:', err.message);
+  }
+}
+// =====================================
 
 cloudinary.config({
   cloud_name: process.env.CLOUDINARY_CLOUD_NAME,
@@ -142,6 +175,17 @@ async function initDB() {
     await pool.query(`ALTER TABLE blogovi ADD COLUMN IF NOT EXISTS video TEXT`);
     // =======================
 
+    // ===== PUSH NOTIFIKACIJE TABELA =====
+    await pool.query(`CREATE TABLE IF NOT EXISTS push_subscriptions (
+      id SERIAL PRIMARY KEY,
+      "userId" INTEGER NOT NULL,
+      endpoint TEXT NOT NULL UNIQUE,
+      p256dh TEXT NOT NULL,
+      auth TEXT NOT NULL,
+      created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+    )`);
+    // =====================================
+
     console.log('Baza inicijalizovana uspešno!');
   } catch (err) {
     console.error('Greška pri inicijalizaciji baze:', err.message);
@@ -176,7 +220,7 @@ app.get('/blog.html', async (req, res) => {
     const b = result.rows[0];
     const naslov = (b.naslov || 'Blog – LokalniPlodovi').replace(/&/g, '&amp;').replace(/"/g, '&quot;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
     const opis = (b.tekst || '').substring(0, 160).replace(/\n/g, ' ').replace(/&/g, '&amp;').replace(/"/g, '&quot;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
-    const slika = b.slika || 'https://lokalniplodovi.rs/og-slika.jpg';
+    const slika = (b.slika && b.slika.startsWith('http')) ? b.slika : 'https://lokalniplodovi.rs/og-slika.jpg';
     const blogUrl = `https://lokalniplodovi.rs/blog.html?id=${id}`;
     let html = fs.readFileSync(path.join(__dirname, 'public', 'blog.html'), 'utf8');
     html = html
@@ -205,7 +249,7 @@ app.get('/blog-share/:id', async (req, res) => {
     const b = result.rows[0];
     const naslov = b.naslov.replace(/"/g, '&quot;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
     const opis = b.tekst.substring(0, 160).replace(/\n/g, ' ').replace(/"/g, '&quot;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
-    const slika = b.slika || 'https://lokalniplodovi.rs/og-slika.jpg';
+    const slika = (b.slika && b.slika.startsWith('http')) ? b.slika : 'https://lokalniplodovi.rs/og-slika.jpg';
     const url = `https://lokalniplodovi.rs/blog.html?id=${req.params.id}`;
     res.setHeader('Content-Type', 'text/html; charset=utf-8');
     res.send(`<!DOCTYPE html><html lang="sr"><head><meta charset="UTF-8"><meta property="og:title" content="${naslov}"><meta property="og:description" content="${opis}"><meta property="og:image" content="${slika}"><meta property="og:url" content="${url}"><meta property="og:type" content="article"><meta property="og:site_name" content="LokalniPlodovi"><meta property="og:locale" content="sr_RS"><meta name="twitter:card" content="summary_large_image"><meta name="twitter:title" content="${naslov}"><meta name="twitter:description" content="${opis}"><meta name="twitter:image" content="${slika}"><title>${naslov} – LokalniPlodovi</title></head><body><p>Preusmeravanje na blog post...</p><script>window.location.href='${url}';</script></body></html>`);
@@ -771,7 +815,7 @@ app.get('/prodavac-share/:id', async (req, res) => {
     const ime = (u.ime || 'Prodavac').replace(/"/g, '&quot;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
     const opisOsnovni = u.opis || `Domaći proizvodi direktno sa imanja${u.lokacija ? ' — ' + u.lokacija : ''}.`;
     const opis = opisOsnovni.substring(0, 160).replace(/\n/g, ' ').replace(/"/g, '&quot;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
-    const slika = u.slika || 'https://lokalniplodovi.rs/og-slika.jpg';
+    const slika = (u.slika && u.slika.startsWith('http')) ? u.slika : 'https://lokalniplodovi.rs/og-slika.jpg';
     const url = `https://lokalniplodovi.rs/moj-profil.html?userId=${req.params.id}`;
     res.setHeader('Content-Type', 'text/html; charset=utf-8');
     res.send(`<!DOCTYPE html><html lang="sr"><head><meta charset="UTF-8"><meta property="og:title" content="${ime} – LokalniPlodovi"><meta property="og:description" content="${opis}"><meta property="og:image" content="${slika}"><meta property="og:url" content="${url}"><meta property="og:type" content="profile"><meta property="og:site_name" content="LokalniPlodovi"><meta property="og:locale" content="sr_RS"><meta name="twitter:card" content="summary_large_image"><meta name="twitter:title" content="${ime} – LokalniPlodovi"><meta name="twitter:description" content="${opis}"><meta name="twitter:image" content="${slika}"><title>${ime} – LokalniPlodovi</title></head><body><p>Preusmeravanje na profil...</p><script>window.location.href='${url}';</script></body></html>`);
@@ -785,6 +829,34 @@ app.get('/objave/:userId', async (req, res) => {
   try {
     const result = await pool.query(`SELECT id, tekst, slika, video, created_at FROM objave WHERE "userId" = $1 ORDER BY created_at DESC`, [req.params.userId]);
     res.json(result.rows);
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+app.get('/push/vapid-public-key', (req, res) => {
+  res.json({ publicKey: process.env.VAPID_PUBLIC_KEY });
+});
+
+app.post('/push/subscribe', async (req, res) => {
+  const token = req.headers.authorization?.split(' ')[1];
+  if (!token) return res.status(401).json({ error: 'Niste ulogovani' });
+  try {
+    const decoded = jwt.verify(token, JWT_SECRET);
+    const { subscription } = req.body;
+    if (!subscription || !subscription.endpoint || !subscription.keys) return res.status(400).json({ error: 'Nevažeća pretplata' });
+    await pool.query(
+      `INSERT INTO push_subscriptions ("userId", endpoint, p256dh, auth) VALUES ($1, $2, $3, $4)
+       ON CONFLICT (endpoint) DO UPDATE SET "userId" = $1`,
+      [decoded.userId, subscription.endpoint, subscription.keys.p256dh, subscription.keys.auth]
+    );
+    res.json({ message: 'Pretplata na notifikacije uspešna!' });
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+app.post('/push/unsubscribe', async (req, res) => {
+  try {
+    const { endpoint } = req.body;
+    if (endpoint) await pool.query('DELETE FROM push_subscriptions WHERE endpoint = $1', [endpoint]);
+    res.json({ message: 'Odjavljeno sa notifikacija' });
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
@@ -802,6 +874,12 @@ app.post('/poruka', async (req, res) => {
     if (primalac.rows[0] && primalac.rows[0].email) {
       posaljiEmailNotifikaciju(primalac.rows[0].email, primalac.rows[0].ime, posiljalac.rows[0]?.ime || 'Korisnik').catch(e => console.error('Email async greška:', e.message));
     }
+    posaljiPushNotifikaciju(
+      ka_user_id,
+      `📬 Nova poruka od ${posiljalac.rows[0]?.ime || 'korisnika'}`,
+      tekst.trim().substring(0, 100),
+      '/moj-profil.html'
+    ).catch(e => console.error('Push async greška:', e.message));
     res.json({ message: 'Poruka poslata!', id: result.rows[0].id });
   } catch (err) { res.status(500).json({ error: err.message }); }
 });

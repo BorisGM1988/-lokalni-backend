@@ -14,7 +14,8 @@
     "cors": "^2.8.5",
     "cloudinary": "^2.5.1",
     "@sendgrid/mail": "^8.1.0",
-    "compression": "^1.7.4"
+    "compression": "^1.7.4",
+    "web-push": "^3.6.7"
   },
   "engines": {
     "node": "22.x"

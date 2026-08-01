@@ -4,8 +4,16 @@ const { Pool } = require('pg');
 const bcrypt = require('bcryptjs');
 const jwt = require('jsonwebtoken');
 const cloudinary = require('cloudinary').v2;
-const sgMail = require('@sendgrid/mail');
-sgMail.setApiKey(process.env.SENDGRID_API_KEY);
+const nodemailer = require('nodemailer');
+const brevoTransporter = nodemailer.createTransport({
+  host: 'smtp-relay.brevo.com',
+  port: 587,
+  secure: false,
+  auth: {
+    user: process.env.BREVO_SMTP_USER,
+    pass: process.env.BREVO_SMTP_PASS
+  }
+});
 const webpush = require('web-push');
 webpush.setVapidDetails(
   'mailto:lokalniplodovi@gmail.com',
@@ -18,10 +26,10 @@ const app = express();
 // ===== GZIP KOMPRESIJA =====
 app.use(compression());
 
-// ===== SENDGRID SETUP =====
+// ===== BREVO SETUP =====
 async function posaljiEmailNotifikaciju(email, ime, odKoga) {
   try {
-    await sgMail.send({
+    await brevoTransporter.sendMail({
       to: email,
       from: 'lokalniplodovi@gmail.com',
       subject: '📬 Imate novu poruku na LokalniPlodovi',
@@ -43,7 +51,7 @@ async function posaljiGrupniEmail(emailovi, naslov, poruka) {
   const rezultati = { uspesno: 0, neuspesno: 0 };
   for (const email of emailovi) {
     try {
-      await sgMail.send({
+      await brevoTransporter.sendMail({
         to: email,
         from: 'lokalniplodovi@gmail.com',
         subject: naslov,
@@ -62,7 +70,7 @@ async function posaljiGrupniEmail(emailovi, naslov, poruka) {
   }
   return rezultati;
 }
-// ===== KRAJ SENDGRID SETUP =====
+// ===== KRAJ BREVO SETUP =====
 
 // ===== PUSH NOTIFIKACIJE HELPER =====
 async function posaljiPushNotifikaciju(userId, naslov, telo, url) {

@@ -4,16 +4,6 @@ const { Pool } = require('pg');
 const bcrypt = require('bcryptjs');
 const jwt = require('jsonwebtoken');
 const cloudinary = require('cloudinary').v2;
-const nodemailer = require('nodemailer');
-const brevoTransporter = nodemailer.createTransport({
-  host: 'smtp-relay.brevo.com',
-  port: 587,
-  secure: false,
-  auth: {
-    user: process.env.BREVO_SMTP_USER,
-    pass: process.env.BREVO_SMTP_PASS
-  }
-});
 const webpush = require('web-push');
 webpush.setVapidDetails(
   'mailto:lokalniplodovi@gmail.com',
@@ -26,21 +16,42 @@ const app = express();
 // ===== GZIP KOMPRESIJA =====
 app.use(compression());
 
-// ===== BREVO SETUP =====
+// ===== BREVO SETUP (HTTP API — izbegava blokiran SMTP port na Railway-u) =====
+async function brevoPosaljiMejl(to, subject, html) {
+  const res = await fetch('https://api.brevo.com/v3/smtp/email', {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      'Accept': 'application/json',
+      'api-key': process.env.BREVO_API_KEY
+    },
+    body: JSON.stringify({
+      sender: { email: 'lokalniplodovi@gmail.com', name: 'LokalniPlodovi' },
+      to: [{ email: to }],
+      subject,
+      htmlContent: html
+    })
+  });
+  if (!res.ok) {
+    const errText = await res.text();
+    throw new Error(`Brevo API greška (${res.status}): ${errText}`);
+  }
+  return res.json();
+}
+
 async function posaljiEmailNotifikaciju(email, ime, odKoga) {
   try {
-    await brevoTransporter.sendMail({
-      to: email,
-      from: 'lokalniplodovi@gmail.com',
-      subject: '📬 Imate novu poruku na LokalniPlodovi',
-      html: `<div style="font-family:Arial,sans-serif;max-width:500px;margin:0 auto;padding:20px;">
+    await brevoPosaljiMejl(
+      email,
+      '📬 Imate novu poruku na LokalniPlodovi',
+      `<div style="font-family:Arial,sans-serif;max-width:500px;margin:0 auto;padding:20px;">
         <h2 style="color:#2e7d32;">🌿 LokalniPlodovi</h2>
         <p>Pozdrav <strong>${ime}</strong>,</p>
         <p>Dobili ste novu poruku od korisnika <strong>${odKoga}</strong>.</p>
         <a href="https://lokalniplodovi.rs/moj-profil.html" style="display:inline-block;background:#2e7d32;color:white;padding:12px 24px;border-radius:8px;text-decoration:none;margin-top:10px;">Pogledaj poruku</a>
         <p style="color:#999;font-size:12px;margin-top:30px;">LokalniPlodovi • lokalniplodovi.rs</p>
       </div>`
-    });
+    );
     console.log('✅ Email poslat na:', email);
   } catch (err) {
     console.error('❌ Email greška:', err.message);
@@ -51,17 +62,16 @@ async function posaljiGrupniEmail(emailovi, naslov, poruka) {
   const rezultati = { uspesno: 0, neuspesno: 0 };
   for (const email of emailovi) {
     try {
-      await brevoTransporter.sendMail({
-        to: email,
-        from: 'lokalniplodovi@gmail.com',
-        subject: naslov,
-        html: `<div style="font-family:Arial,sans-serif;max-width:500px;margin:0 auto;padding:20px;">
+      await brevoPosaljiMejl(
+        email,
+        naslov,
+        `<div style="font-family:Arial,sans-serif;max-width:500px;margin:0 auto;padding:20px;">
           <h2 style="color:#2e7d32;">🌿 LokalniPlodovi</h2>
           <div style="background:#f5f5f5;padding:15px;border-radius:8px;">${poruka.replace(/\n/g,'<br>')}</div>
           <a href="https://lokalniplodovi.rs" style="display:inline-block;background:#2e7d32;color:white;padding:12px 24px;border-radius:8px;text-decoration:none;margin-top:10px;">Poseti sajt</a>
           <p style="color:#999;font-size:12px;margin-top:30px;">LokalniPlodovi • lokalniplodovi.rs</p>
         </div>`
-      });
+      );
       rezultati.uspesno++;
     } catch (err) {
       console.error('Greška za:', email, err.message);
@@ -794,8 +804,12 @@ app.post('/admin/grupni-email', adminAuth, async (req, res) => {
     const result = await pool.query(sql);
     const emailovi = result.rows.map(r => r.email).filter(Boolean);
     if (emailovi.length === 0) return res.status(400).json({ error: 'Nema korisnika za slanje' });
-    const rezultati = await posaljiGrupniEmail(emailovi, naslov, poruka);
-    res.json({ message: `Email poslat! Uspešno: ${rezultati.uspesno}, Neuspešno: ${rezultati.neuspesno}` });
+    // Odmah odgovori da izbegnemo 504 timeout; slanje ide u pozadini
+    res.json({ message: `Slanje pokrenuto za ${emailovi.length} korisnika. Rezultat proveri u Railway Deploy Logs.` });
+
+    posaljiGrupniEmail(emailovi, naslov, poruka).then(rezultati => {
+      console.log(`📧 Grupni email završen — Uspešno: ${rezultati.uspesno}, Neuspešno: ${rezultati.neuspesno}`);
+    }).catch(e => console.error('Grupni email greška:', e.message));
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
 

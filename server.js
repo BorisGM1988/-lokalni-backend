@@ -520,7 +520,10 @@ app.get('/svi-prodavci', async (req, res) => {
     const prodavci = result.rows.map(row => {
       let niseParsed = [];
       try { niseParsed = row.nise ? JSON.parse(row.nise) : []; } catch (e) {}
-      return { id: row.id, ime: row.ime || 'Bez imena', opis: row.opis || 'Porodična proizvodnja svežih domaćih proizvoda.', slika: row.slika || '', lokacija: row.lokacija || 'Lokacija nije navedena', nise: niseParsed, username: row.username || null };
+      // Stare base64 slike (data:image/...) su ogromne — ne šalju se u listi,
+      // samo Cloudinary linkovi (http...). Ovo drastično smanjuje veličinu odgovora.
+      const slika = (row.slika && row.slika.startsWith('data:')) ? '' : (row.slika || '');
+      return { id: row.id, ime: row.ime || 'Bez imena', opis: row.opis || 'Porodična proizvodnja svežih domaćih proizvoda.', slika, lokacija: row.lokacija || 'Lokacija nije navedena', nise: niseParsed, username: row.username || null };
     });
     res.json(prodavci);
   } catch (err) {
@@ -588,7 +591,13 @@ app.get('/proizvodi', async (req, res) => {
     else            { sql += ` AND u.aktivan IS NOT FALSE`; }
     sql += ` ORDER BY p.created_at DESC`;
     const result = await pool.query(sql, params);
-    res.json(result.rows);
+    // Stare base64 slike (data:image/...) su ogromne — ne šalju se u listi,
+    // samo Cloudinary linkovi (http...). Drastično smanjuje veličinu odgovora.
+    const proizvodi = result.rows.map(row => {
+      if (row.slika && row.slika.startsWith('data:')) row.slika = '';
+      return row;
+    });
+    res.json(proizvodi);
   } catch (err) {
     console.error(err);
     res.status(500).json({ error: 'Greška pri učitavanju proizvoda' });
@@ -637,7 +646,8 @@ app.get('/prodavci-mapa', async (req, res) => {
       let niseParsed = [];
       try { niseParsed = row.nise ? JSON.parse(row.nise) : []; } catch (e) {}
       if (row.lat && row.lng) {
-        prodavci.push({ id: row.id, ime: row.ime || 'Bez imena', opis: row.opis || 'Domaći proizvodi', slika: row.slika || '', lokacija: row.lokacija || '', nise: niseParsed, lat: parseFloat(row.lat), lng: parseFloat(row.lng) });
+        const slika = (row.slika && row.slika.startsWith('data:')) ? '' : (row.slika || '');
+        prodavci.push({ id: row.id, ime: row.ime || 'Bez imena', opis: row.opis || 'Domaći proizvodi', slika, lokacija: row.lokacija || '', nise: niseParsed, lat: parseFloat(row.lat), lng: parseFloat(row.lng) });
         continue;
       }
       if (!row.lokacija) continue;
@@ -652,7 +662,8 @@ app.get('/prodavci-mapa', async (req, res) => {
         }
         if (koordinate) {
           await pool.query(`UPDATE users SET lat = $1, lng = $2 WHERE id = $3`, [koordinate.lat, koordinate.lng, row.id]);
-          prodavci.push({ id: row.id, ime: row.ime || 'Bez imena', opis: row.opis || 'Domaći proizvodi', slika: row.slika || '', lokacija: row.lokacija || '', nise: niseParsed, lat: koordinate.lat, lng: koordinate.lng });
+          const slika = (row.slika && row.slika.startsWith('data:')) ? '' : (row.slika || '');
+          prodavci.push({ id: row.id, ime: row.ime || 'Bez imena', opis: row.opis || 'Domaći proizvodi', slika, lokacija: row.lokacija || '', nise: niseParsed, lat: koordinate.lat, lng: koordinate.lng });
         }
       } catch (e) { console.log('Geocoding greška za:', row.lokacija); }
     }
@@ -668,6 +679,47 @@ function adminAuth(req, res, next) {
   if (lozinka !== process.env.ADMIN_PASSWORD) return res.status(401).json({ error: 'Neovlašćen pristup' });
   next();
 }
+
+// ===== MIGRACIJA: prebacuje stare base64 slike na Cloudinary, tiho, bez znanja prodavaca =====
+app.post('/admin/migriraj-slike', adminAuth, async (req, res) => {
+  const izvestaj = { users_slika: 0, users_cover: 0, proizvodi_slika: 0, greske: [] };
+  try {
+    // users.slika
+    const korisniciSlika = await pool.query(`SELECT id, slika FROM users WHERE slika LIKE 'data:%'`);
+    for (const row of korisniciSlika.rows) {
+      try {
+        const noviUrl = await uploadSlika(row.slika);
+        await pool.query('UPDATE users SET slika = $1 WHERE id = $2', [noviUrl, row.id]);
+        izvestaj.users_slika++;
+      } catch (e) { izvestaj.greske.push(`users.slika #${row.id}: ${e.message}`); }
+    }
+
+    // users.cover_slika
+    const korisniciCover = await pool.query(`SELECT id, cover_slika FROM users WHERE cover_slika LIKE 'data:%'`);
+    for (const row of korisniciCover.rows) {
+      try {
+        const noviUrl = await uploadSlika(row.cover_slika);
+        await pool.query('UPDATE users SET cover_slika = $1 WHERE id = $2', [noviUrl, row.id]);
+        izvestaj.users_cover++;
+      } catch (e) { izvestaj.greske.push(`users.cover_slika #${row.id}: ${e.message}`); }
+    }
+
+    // proizvodi.slika
+    const proizvodiSlika = await pool.query(`SELECT id, slika FROM proizvodi WHERE slika LIKE 'data:%'`);
+    for (const row of proizvodiSlika.rows) {
+      try {
+        const noviUrl = await uploadSlika(row.slika);
+        await pool.query('UPDATE proizvodi SET slika = $1 WHERE id = $2', [noviUrl, row.id]);
+        izvestaj.proizvodi_slika++;
+      } catch (e) { izvestaj.greske.push(`proizvodi.slika #${row.id}: ${e.message}`); }
+    }
+
+    res.json({ message: 'Migracija završena', ...izvestaj });
+  } catch (err) {
+    console.error('Migracija greška:', err);
+    res.status(500).json({ error: err.message, ...izvestaj });
+  }
+});
 
 app.get('/admin/stats', adminAuth, async (req, res) => {
   try {

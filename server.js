@@ -681,11 +681,13 @@ function adminAuth(req, res, next) {
 }
 
 // ===== MIGRACIJA: prebacuje stare base64 slike na Cloudinary, tiho, bez znanja prodavaca =====
+// Radi u malim grupama (limit po pozivu) da ne preoptereti server memorijski.
 app.post('/admin/migriraj-slike', adminAuth, async (req, res) => {
+  const limit = Math.min(parseInt(req.query.limit) || 3, 10);
   const izvestaj = { users_slika: 0, users_cover: 0, proizvodi_slika: 0, greske: [] };
   try {
     // users.slika
-    const korisniciSlika = await pool.query(`SELECT id, slika FROM users WHERE slika LIKE 'data:%'`);
+    const korisniciSlika = await pool.query(`SELECT id, slika FROM users WHERE slika LIKE 'data:%' LIMIT $1`, [limit]);
     for (const row of korisniciSlika.rows) {
       try {
         const noviUrl = await uploadSlika(row.slika);
@@ -695,7 +697,7 @@ app.post('/admin/migriraj-slike', adminAuth, async (req, res) => {
     }
 
     // users.cover_slika
-    const korisniciCover = await pool.query(`SELECT id, cover_slika FROM users WHERE cover_slika LIKE 'data:%'`);
+    const korisniciCover = await pool.query(`SELECT id, cover_slika FROM users WHERE cover_slika LIKE 'data:%' LIMIT $1`, [limit]);
     for (const row of korisniciCover.rows) {
       try {
         const noviUrl = await uploadSlika(row.cover_slika);
@@ -705,7 +707,7 @@ app.post('/admin/migriraj-slike', adminAuth, async (req, res) => {
     }
 
     // proizvodi.slika
-    const proizvodiSlika = await pool.query(`SELECT id, slika FROM proizvodi WHERE slika LIKE 'data:%'`);
+    const proizvodiSlika = await pool.query(`SELECT id, slika FROM proizvodi WHERE slika LIKE 'data:%' LIMIT $1`, [limit]);
     for (const row of proizvodiSlika.rows) {
       try {
         const noviUrl = await uploadSlika(row.slika);
@@ -714,7 +716,12 @@ app.post('/admin/migriraj-slike', adminAuth, async (req, res) => {
       } catch (e) { izvestaj.greske.push(`proizvodi.slika #${row.id}: ${e.message}`); }
     }
 
-    res.json({ message: 'Migracija završena', ...izvestaj });
+    // Da li ima još slika za sledeći poziv?
+    const preostaloUsers = await pool.query(`SELECT COUNT(*) FROM users WHERE slika LIKE 'data:%' OR cover_slika LIKE 'data:%'`);
+    const preostaloProizvodi = await pool.query(`SELECT COUNT(*) FROM proizvodi WHERE slika LIKE 'data:%'`);
+    const preostalo = parseInt(preostaloUsers.rows[0].count) + parseInt(preostaloProizvodi.rows[0].count);
+
+    res.json({ message: 'Grupa migrirana', preostalo, ...izvestaj });
   } catch (err) {
     console.error('Migracija greška:', err);
     res.status(500).json({ error: err.message, ...izvestaj });

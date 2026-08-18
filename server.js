@@ -810,14 +810,27 @@ app.delete('/admin/proizvod/:id', adminAuth, async (req, res) => {
 });
 
 app.put('/admin/proizvod/:id', adminAuth, async (req, res) => {
-  const { naziv, cena, kolicina, glavnaNisa, podnisa, opis } = req.body;
+  const { naziv, cena, kolicina, glavnaNisa, podnisa, opis, slika } = req.body;
   if (!naziv || cena === undefined || kolicina === undefined || !glavnaNisa) return res.status(400).json({ error: 'Naziv, cena, količina i niša su obavezni' });
   try {
     const check = await pool.query('SELECT id FROM proizvodi WHERE id = $1', [req.params.id]);
     if (!check.rows[0]) return res.status(404).json({ error: 'Proizvod nije pronađen' });
     const podnisaFinal = (podnisa && String(podnisa).trim()) ? String(podnisa).trim() : glavnaNisa;
-    await pool.query(`UPDATE proizvodi SET naziv=$1, cena=$2, kolicina=$3, "glavnaNisa"=$4, podnisa=$5, opis=$6 WHERE id=$7`, [naziv, cena, kolicina, glavnaNisa, podnisaFinal, opis || null, req.params.id]);
+    await pool.query(`UPDATE proizvodi SET naziv=$1, cena=$2, kolicina=$3, "glavnaNisa"=$4, podnisa=$5, opis=$6, slika=$7 WHERE id=$8`, [naziv, cena, kolicina, glavnaNisa, podnisaFinal, opis || null, slika === undefined ? null : slika, req.params.id]);
     res.json({ message: 'Proizvod uspešno izmenjen!' });
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+app.put('/admin/korisnik/:id', adminAuth, async (req, res) => {
+  const { ime, telefon, lokacija, slika, cover_slika } = req.body;
+  try {
+    const check = await pool.query('SELECT id FROM users WHERE id = $1', [req.params.id]);
+    if (!check.rows[0]) return res.status(404).json({ error: 'Korisnik nije pronađen' });
+    await pool.query(
+      `UPDATE users SET ime=$1, telefon=$2, lokacija=$3, slika=$4, cover_slika=$5 WHERE id=$6`,
+      [ime || null, telefon || null, lokacija || null, slika === undefined ? null : slika, cover_slika === undefined ? null : cover_slika, req.params.id]
+    );
+    res.json({ message: 'Korisnik uspešno izmenjen!' });
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
 

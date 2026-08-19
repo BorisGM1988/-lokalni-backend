@@ -922,6 +922,28 @@ app.get('/prodavac-share/:id', async (req, res) => {
   }
 });
 
+app.get('/proizvod-share/:id', async (req, res) => {
+  try {
+    const result = await pool.query(
+      `SELECT p.naziv, p.cena, p.opis, p.slika, p."userId", u.ime as "prodavacIme", u.lokacija as "prodavacLokacija"
+       FROM proizvodi p JOIN users u ON p."userId" = u.id WHERE p.id = $1`,
+      [req.params.id]
+    );
+    if (!result.rows[0]) return res.status(404).send('Proizvod nije pronađen');
+    const p = result.rows[0];
+    const naziv = (p.naziv || 'Proizvod').replace(/"/g, '&quot;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+    const opisOsnovni = p.opis || `${p.naziv} – ${p.cena} RSD, direktno od ${p.prodavacIme || 'lokalnog proizvođača'}${p.prodavacLokacija ? ' — ' + p.prodavacLokacija : ''}.`;
+    const opis = opisOsnovni.substring(0, 160).replace(/\n/g, ' ').replace(/"/g, '&quot;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+    const slika = (p.slika && p.slika.startsWith('http')) ? p.slika : 'https://lokalniplodovi.rs/og-slika.jpg';
+    const url = `https://lokalniplodovi.rs/moj-profil.html?userId=${p.userId}`;
+    res.setHeader('Content-Type', 'text/html; charset=utf-8');
+    res.send(`<!DOCTYPE html><html lang="sr"><head><meta charset="UTF-8"><meta property="og:title" content="${naziv} – ${p.cena} RSD | LokalniPlodovi"><meta property="og:description" content="${opis}"><meta property="og:image" content="${slika}"><meta property="og:url" content="${url}"><meta property="og:type" content="product"><meta property="og:site_name" content="LokalniPlodovi"><meta property="og:locale" content="sr_RS"><meta name="twitter:card" content="summary_large_image"><meta name="twitter:title" content="${naziv} – ${p.cena} RSD"><meta name="twitter:description" content="${opis}"><meta name="twitter:image" content="${slika}"><title>${naziv} – LokalniPlodovi</title></head><body><p>Preusmeravanje...</p><script>window.location.href='${url}';</script></body></html>`);
+  } catch (err) {
+    console.error('Proizvod share greška:', err);
+    res.status(500).send('Greška na serveru');
+  }
+});
+
 app.get('/objave/:userId', async (req, res) => {
   try {
     const result = await pool.query(`SELECT id, tekst, slika, video, created_at FROM objave WHERE "userId" = $1 ORDER BY created_at DESC`, [req.params.userId]);

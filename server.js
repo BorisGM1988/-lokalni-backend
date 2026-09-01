@@ -825,13 +825,30 @@ app.put('/admin/proizvod/:id', adminAuth, async (req, res) => {
 });
 
 app.put('/admin/korisnik/:id', adminAuth, async (req, res) => {
-  const { ime, telefon, lokacija, slika, cover_slika } = req.body;
+  const { ime, telefon, lokacija, slika, cover_slika, email } = req.body;
   try {
     const check = await pool.query('SELECT id FROM users WHERE id = $1', [req.params.id]);
     if (!check.rows[0]) return res.status(404).json({ error: 'Korisnik nije pronađen' });
+
+    if (email !== undefined) {
+      const emailTrim = String(email).trim();
+      if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(emailTrim)) {
+        return res.status(400).json({ error: 'Email adresa nije validna (npr. nedostaje .com)' });
+      }
+      const emailZauzet = await pool.query('SELECT id FROM users WHERE email = $1 AND id != $2', [emailTrim, req.params.id]);
+      if (emailZauzet.rows[0]) return res.status(400).json({ error: 'Taj email već koristi drugi korisnik' });
+    }
+
     await pool.query(
-      `UPDATE users SET ime=$1, telefon=$2, lokacija=$3, slika=$4, cover_slika=$5 WHERE id=$6`,
-      [ime || null, telefon || null, lokacija || null, slika === undefined ? null : slika, cover_slika === undefined ? null : cover_slika, req.params.id]
+      `UPDATE users SET
+         ime = COALESCE($1, ime),
+         telefon = COALESCE($2, telefon),
+         lokacija = COALESCE($3, lokacija),
+         slika = COALESCE($4, slika),
+         cover_slika = COALESCE($5, cover_slika),
+         email = COALESCE($6, email)
+       WHERE id = $7`,
+      [ime ?? null, telefon ?? null, lokacija ?? null, slika ?? null, cover_slika ?? null, email !== undefined ? String(email).trim() : null, req.params.id]
     );
     res.json({ message: 'Korisnik uspešno izmenjen!' });
   } catch (err) { res.status(500).json({ error: err.message }); }

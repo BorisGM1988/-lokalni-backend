@@ -580,6 +580,47 @@ app.post('/dodaj-proizvod', async (req, res) => {
   }
 });
 
+// Uvoz više proizvoda odjednom (iz Excel/CSV fajla koji je prodavac otpremio na frontend-u).
+// Frontend parsira fajl u niz { naziv, cena, kolicina, opis, podnisa } i šalje ovde,
+// zajedno sa zajedničkom glavnaNisa za ceo uvoz. Slike se dodaju posle, ručno, po proizvodu.
+app.post('/uvoz-proizvoda', async (req, res) => {
+  const token = req.headers.authorization?.split(' ')[1];
+  if (!token) return res.status(401).json({ error: 'Niste ulogovani' });
+  try {
+    const decoded = jwt.verify(token, JWT_SECRET);
+    const { proizvodi, glavnaNisa } = req.body;
+    if (!glavnaNisa) return res.status(400).json({ error: 'Niša je obavezna za ceo uvoz' });
+    if (!Array.isArray(proizvodi) || proizvodi.length === 0) return res.status(400).json({ error: 'Nema proizvoda za uvoz' });
+    if (proizvodi.length > 300) return res.status(400).json({ error: 'Previše redova odjednom (maksimalno 300 po uvozu)' });
+
+    let uvezeno = 0;
+    const greske = [];
+    for (let i = 0; i < proizvodi.length; i++) {
+      const p = proizvodi[i];
+      const naziv = (p.naziv || '').toString().trim();
+      const cena = parseFloat(p.cena);
+      const kolicina = parseFloat(p.kolicina);
+      if (!naziv || isNaN(cena) || isNaN(kolicina)) {
+        greske.push(`Red ${i + 2}: nedostaje naziv, cena ili količina`);
+        continue;
+      }
+      try {
+        await pool.query(
+          `INSERT INTO proizvodi ("userId", naziv, opis, cena, kolicina, "glavnaNisa", podnisa, slika) VALUES ($1, $2, $3, $4, $5, $6, $7, $8)`,
+          [decoded.userId, naziv, (p.opis || '').toString().trim() || null, cena, kolicina, glavnaNisa, (p.podnisa || '').toString().trim() || null, null]
+        );
+        uvezeno++;
+      } catch (e) {
+        greske.push(`Red ${i + 2}: greška pri čuvanju (${e.message})`);
+      }
+    }
+    res.status(201).json({ message: `Uvezeno ${uvezeno} od ${proizvodi.length} proizvoda`, uvezeno, ukupno: proizvodi.length, greske });
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: 'Greška pri uvozu proizvoda' });
+  }
+});
+
 app.get('/proizvodi', async (req, res) => {
   const { glavnaNisa, podnisa, userId } = req.query;
   try {

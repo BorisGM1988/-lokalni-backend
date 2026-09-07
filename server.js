@@ -586,10 +586,10 @@ app.post('/dodaj-proizvod', async (req, res) => {
 app.post('/uvoz-proizvoda', async (req, res) => {
   const token = req.headers.authorization?.split(' ')[1];
   if (!token) return res.status(401).json({ error: 'Niste ulogovani' });
+  const VALIDNE_NISE = ['Voće', 'Povrće', 'Mlečni proizvodi', 'Meso', 'Med', 'Jaja', 'Bilje i Zdravlje', 'Domaća radinost'];
   try {
     const decoded = jwt.verify(token, JWT_SECRET);
-    const { proizvodi, glavnaNisa } = req.body;
-    if (!glavnaNisa) return res.status(400).json({ error: 'Niša je obavezna za ceo uvoz' });
+    const { proizvodi } = req.body;
     if (!Array.isArray(proizvodi) || proizvodi.length === 0) return res.status(400).json({ error: 'Nema proizvoda za uvoz' });
     if (proizvodi.length > 300) return res.status(400).json({ error: 'Previše redova odjednom (maksimalno 300 po uvozu)' });
 
@@ -600,8 +600,13 @@ app.post('/uvoz-proizvoda', async (req, res) => {
       const naziv = (p.naziv || '').toString().trim();
       const cena = parseFloat(p.cena);
       const kolicina = parseFloat(p.kolicina);
+      const glavnaNisa = (p.glavnaNisa || '').toString().trim();
       if (!naziv || isNaN(cena) || isNaN(kolicina)) {
         greske.push(`Red ${i + 2}: nedostaje naziv, cena ili količina`);
+        continue;
+      }
+      if (!glavnaNisa || !VALIDNE_NISE.includes(glavnaNisa)) {
+        greske.push(`Red ${i + 2} (${naziv}): niša nije izabrana ili nije prepoznata`);
         continue;
       }
       try {
@@ -650,12 +655,19 @@ app.put('/proizvod/:id', async (req, res) => {
   if (!token) return res.status(401).json({ error: 'Niste ulogovani' });
   try {
     const decoded = jwt.verify(token, JWT_SECRET);
-    const { naziv, cena, kolicina, opis } = req.body;
+    const { naziv, cena, kolicina, opis, slikaBase64 } = req.body;
     if (!naziv || !cena || !kolicina) return res.status(400).json({ error: 'Obavezna polja nisu popunjena' });
     const check = await pool.query('SELECT "userId" FROM proizvodi WHERE id = $1', [req.params.id]);
     if (!check.rows[0]) return res.status(404).json({ error: 'Proizvod nije pronađen' });
     if (check.rows[0].userId !== decoded.userId) return res.status(403).json({ error: 'Nemate dozvolu' });
-    await pool.query(`UPDATE proizvodi SET naziv=$1, cena=$2, kolicina=$3, opis=$4 WHERE id=$5`, [naziv, cena, kolicina, opis || null, req.params.id]);
+
+    if (slikaBase64 !== undefined) {
+      // Ako je poslato prazno, briše sliku; inače otpremi novu na Cloudinary i sačuvaj novi link.
+      const novaSlika = slikaBase64 ? await uploadSlika(slikaBase64) : null;
+      await pool.query(`UPDATE proizvodi SET naziv=$1, cena=$2, kolicina=$3, opis=$4, slika=$5 WHERE id=$6`, [naziv, cena, kolicina, opis || null, novaSlika, req.params.id]);
+    } else {
+      await pool.query(`UPDATE proizvodi SET naziv=$1, cena=$2, kolicina=$3, opis=$4 WHERE id=$5`, [naziv, cena, kolicina, opis || null, req.params.id]);
+    }
     res.json({ message: 'Proizvod uspešno izmenjen!' });
   } catch (err) {
     console.error(err);

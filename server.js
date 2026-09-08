@@ -589,9 +589,11 @@ app.post('/uvoz-proizvoda', async (req, res) => {
   const VALIDNE_NISE = ['Voće', 'Povrće', 'Mlečni proizvodi', 'Meso', 'Med', 'Jaja', 'Bilje i Zdravlje', 'Domaća radinost'];
   try {
     const decoded = jwt.verify(token, JWT_SECRET);
-    const { proizvodi } = req.body;
+    const { proizvodi, glavnaNisa } = req.body;
+    const zajednickaNisa = (glavnaNisa || '').toString().trim();
     if (!Array.isArray(proizvodi) || proizvodi.length === 0) return res.status(400).json({ error: 'Nema proizvoda za uvoz' });
     if (proizvodi.length > 300) return res.status(400).json({ error: 'Previše redova odjednom (maksimalno 300 po uvozu)' });
+    if (!zajednickaNisa || !VALIDNE_NISE.includes(zajednickaNisa)) return res.status(400).json({ error: 'Glavna niša nije izabrana ili nije prepoznata' });
 
     let uvezeno = 0;
     const greske = [];
@@ -600,19 +602,14 @@ app.post('/uvoz-proizvoda', async (req, res) => {
       const naziv = (p.naziv || '').toString().trim();
       const cena = parseFloat(p.cena);
       const kolicina = parseFloat(p.kolicina);
-      const glavnaNisa = (p.glavnaNisa || '').toString().trim();
       if (!naziv || isNaN(cena) || isNaN(kolicina)) {
         greske.push(`Red ${i + 2}: nedostaje naziv, cena ili količina`);
-        continue;
-      }
-      if (!glavnaNisa || !VALIDNE_NISE.includes(glavnaNisa)) {
-        greske.push(`Red ${i + 2} (${naziv}): niša nije izabrana ili nije prepoznata`);
         continue;
       }
       try {
         await pool.query(
           `INSERT INTO proizvodi ("userId", naziv, opis, cena, kolicina, "glavnaNisa", podnisa, slika) VALUES ($1, $2, $3, $4, $5, $6, $7, $8)`,
-          [decoded.userId, naziv, (p.opis || '').toString().trim() || null, cena, kolicina, glavnaNisa, (p.podnisa || '').toString().trim() || null, null]
+          [decoded.userId, naziv, (p.opis || '').toString().trim() || null, cena, kolicina, zajednickaNisa, (p.podnisa || '').toString().trim() || null, null]
         );
         uvezeno++;
       } catch (e) {

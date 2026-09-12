@@ -204,6 +204,14 @@ async function initDB() {
     )`);
     // =====================================
 
+    // ===== KLIKOVI NA TELEFON (praćenje interesovanja kupaca) =====
+    await pool.query(`CREATE TABLE IF NOT EXISTS klikovi_telefon (
+      id SERIAL PRIMARY KEY,
+      prodavac_id INTEGER NOT NULL,
+      created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+    )`);
+    // ===============================================================
+
     console.log('Baza inicijalizovana uspešno!');
   } catch (err) {
     console.error('Greška pri inicijalizaciji baze:', err.message);
@@ -329,6 +337,19 @@ app.get('/random-proizvodi', async (req, res) => {
   }
 });
 // =====================================
+
+// Beleži klik na broj telefona prodavca (signal namere kupovine)
+app.post('/prijavi-klik-telefon', async (req, res) => {
+  const { prodavac_id } = req.body;
+  if (!prodavac_id) return res.status(400).json({ error: 'Nedostaje prodavac_id' });
+  try {
+    await pool.query('INSERT INTO klikovi_telefon (prodavac_id) VALUES ($1)', [prodavac_id]);
+    res.json({ ok: true });
+  } catch (err) {
+    console.error('Klik na telefon greška:', err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
 
 app.post('/register', async (req, res) => {
   const { ime, email, lozinka, telefon, lokacija, nise, opis } = req.body;
@@ -786,6 +807,14 @@ app.get('/admin/stats', adminAuth, async (req, res) => {
     const kupci = await pool.query("SELECT COUNT(*) FROM users WHERE tip = 'kupac'");
     const blogovi = await pool.query('SELECT COUNT(*) FROM blogovi');
     res.json({ korisnici: parseInt(korisnici.rows[0].count), proizvodi: parseInt(proizvodi.rows[0].count), objave: parseInt(objave.rows[0].count), kupci: parseInt(kupci.rows[0].count), blogovi: parseInt(blogovi.rows[0].count) });
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+app.get('/admin/klikovi-telefon', adminAuth, async (req, res) => {
+  try {
+    const ukupno = await pool.query('SELECT COUNT(*) FROM klikovi_telefon');
+    const poProdavcu = await pool.query(`SELECT prodavac_id, COUNT(*) as broj FROM klikovi_telefon GROUP BY prodavac_id`);
+    res.json({ ukupno: parseInt(ukupno.rows[0].count), poProdavcu: poProdavcu.rows });
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
 

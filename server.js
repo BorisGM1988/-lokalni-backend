@@ -820,7 +820,7 @@ app.get('/admin/klikovi-telefon', adminAuth, async (req, res) => {
 
 app.get('/admin/korisnici', adminAuth, async (req, res) => {
   try {
-    const result = await pool.query(`SELECT id, ime, email, telefon, lokacija, nise, tip, username, created_at FROM users ORDER BY created_at DESC`);
+    const result = await pool.query(`SELECT id, ime, email, telefon, lokacija, nise, tip, username, created_at, slika FROM users ORDER BY created_at DESC`);
     res.json(result.rows);
   } catch (err) { res.status(500).json({ error: err.message }); }
 });

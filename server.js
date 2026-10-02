@@ -966,14 +966,21 @@ app.post('/admin/set-username/:id', adminAuth, async (req, res) => {
 });
 
 app.post('/admin/grupni-email', adminAuth, async (req, res) => {
-  const { naslov, poruka, ciljnaGrupa } = req.body;
+  const { naslov, poruka, ciljnaGrupa, emailovi: emailListaIzZahteva } = req.body;
   if (!naslov || !poruka) return res.status(400).json({ error: 'Naslov i poruka su obavezni' });
   try {
-    let sql = 'SELECT email FROM users WHERE 1=1';
-    if (ciljnaGrupa === 'prodavci') sql += ` AND tip = 'prodavac'`;
-    else if (ciljnaGrupa === 'kupci') sql += ` AND tip = 'kupac'`;
-    const result = await pool.query(sql);
-    const emailovi = result.rows.map(r => r.email).filter(Boolean);
+    let emailovi;
+    // Ako je poslata konkretna lista email adresa (npr. iz filtera "bez slike/proizvoda"
+    // u tabu Prodavači), koristi nju direktno umesto da ponovo upituje bazu po grupi.
+    if (Array.isArray(emailListaIzZahteva) && emailListaIzZahteva.length > 0) {
+      emailovi = emailListaIzZahteva.filter(Boolean);
+    } else {
+      let sql = 'SELECT email FROM users WHERE 1=1';
+      if (ciljnaGrupa === 'prodavci') sql += ` AND tip = 'prodavac'`;
+      else if (ciljnaGrupa === 'kupci') sql += ` AND tip = 'kupac'`;
+      const result = await pool.query(sql);
+      emailovi = result.rows.map(r => r.email).filter(Boolean);
+    }
     if (emailovi.length === 0) return res.status(400).json({ error: 'Nema korisnika za slanje' });
     // Odmah odgovori da izbegnemo 504 timeout; slanje ide u pozadini
     res.json({ message: `Slanje pokrenuto za ${emailovi.length} korisnika. Rezultat proveri u Railway Deploy Logs.` });

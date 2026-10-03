@@ -13,6 +13,27 @@ webpush.setVapidDetails(
 
 const app = express();
 
+// ===== SLUG HELPER (za SEO-prijateljske URL-ove blog postova) =====
+// Pretvara "Kako pravim pravi domaći ajvar" u "kako-pravim-pravi-domaci-ajvar"
+// (podržava i ćirilicu i latinicu sa kvačicama)
+function napraviSlug(tekst) {
+  const cirilicaLatinica = {
+    а:'a', б:'b', в:'v', г:'g', д:'d', ђ:'dj', е:'e', ж:'z', з:'z', и:'i',
+    ј:'j', к:'k', л:'l', љ:'lj', м:'m', н:'n', њ:'nj', о:'o', п:'p', р:'r',
+    с:'s', т:'t', ћ:'c', у:'u', ф:'f', х:'h', ц:'c', ч:'c', џ:'dz', ш:'s',
+    А:'a', Б:'b', В:'v', Г:'g', Д:'d', Ђ:'dj', Е:'e', Ж:'z', З:'z', И:'i',
+    Ј:'j', К:'k', Л:'l', Љ:'lj', М:'m', Н:'n', Њ:'nj', О:'o', П:'p', Р:'r',
+    С:'s', Т:'t', Ћ:'c', У:'u', Ф:'f', Х:'h', Ц:'c', Ч:'c', Џ:'dz', Ш:'s',
+  };
+  const latinicaKvacice = { č:'c', ć:'c', š:'s', đ:'dj', ž:'z', Č:'c', Ć:'c', Š:'s', Đ:'dj', Ž:'z' };
+  const zamene = { ...cirilicaLatinica, ...latinicaKvacice };
+  return (tekst || 'post')
+    .split('').map(k => zamene[k] || k).join('')
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, '-')
+    .replace(/(^-|-$)/g, '') || 'post';
+}
+
 // ===== GZIP KOMPRESIJA =====
 app.use(compression());
 
@@ -191,6 +212,24 @@ async function initDB() {
     )`);
     await pool.query(`ALTER TABLE blogovi ADD COLUMN IF NOT EXISTS slika TEXT`);
     await pool.query(`ALTER TABLE blogovi ADD COLUMN IF NOT EXISTS video TEXT`);
+    await pool.query(`ALTER TABLE blogovi ADD COLUMN IF NOT EXISTS slug TEXT`);
+    // Popuni slug za postojeće blog postove koji ga još nemaju (jednokratno, bezbedno
+    // da se pokrene više puta — radi samo na redovima gde je slug još prazan)
+    try {
+      const zauzeti = new Set(
+        (await pool.query(`SELECT slug FROM blogovi WHERE slug IS NOT NULL`)).rows.map(r => r.slug)
+      );
+      const bezSluga = (await pool.query(`SELECT id, naslov FROM blogovi WHERE slug IS NULL ORDER BY id ASC`)).rows;
+      for (const red of bezSluga) {
+        let osnova = napraviSlug(red.naslov);
+        let kandidat = osnova;
+        let brojac = 2;
+        while (zauzeti.has(kandidat)) { kandidat = `${osnova}-${brojac++}`; }
+        zauzeti.add(kandidat);
+        await pool.query(`UPDATE blogovi SET slug = $1 WHERE id = $2`, [kandidat, red.id]);
+      }
+      if (bezSluga.length > 0) console.log(`Popunjen slug za ${bezSluga.length} postojećih blog postova.`);
+    } catch (e) { console.error('Greška pri popunjavanju slug-ova za blog:', e); }
     // =======================
 
     // ===== PUSH NOTIFIKACIJE TABELA =====
@@ -1268,8 +1307,17 @@ app.post('/blog', async (req, res) => {
     if (!naslov || !naslov.trim()) return res.status(400).json({ error: 'Naslov je obavezan' });
     if (!tekst || !tekst.trim()) return res.status(400).json({ error: 'Tekst bloga je obavezan' });
     const slikaUrl = await uploadSlika(slikaBase64);
-    const result = await pool.query(`INSERT INTO blogovi ("userId", naslov, tekst, slika, video) VALUES ($1, $2, $3, $4, $5) RETURNING id`, [decoded.userId, naslov.trim(), tekst.trim(), slikaUrl || null, videoUrl || null]);
-    res.json({ message: 'Blog uspešno objavljen!', blogId: result.rows[0].id });
+
+    // Generiši jedinstven slug od naslova (npr. "kako-pravim-pravi-domaci-ajvar"),
+    // a ako već postoji isti slug, doda se -2, -3... da ostane jedinstven.
+    const osnovaSluga = napraviSlug(naslov.trim());
+    const postojeci = await pool.query(`SELECT slug FROM blogovi WHERE slug = $1 OR slug LIKE $2`, [osnovaSluga, `${osnovaSluga}-%`]);
+    const zauzetiSlugovi = new Set(postojeci.rows.map(r => r.slug));
+    let slug = osnovaSluga, brojac = 2;
+    while (zauzetiSlugovi.has(slug)) { slug = `${osnovaSluga}-${brojac++}`; }
+
+    const result = await pool.query(`INSERT INTO blogovi ("userId", naslov, tekst, slika, video, slug) VALUES ($1, $2, $3, $4, $5, $6) RETURNING id`, [decoded.userId, naslov.trim(), tekst.trim(), slikaUrl || null, videoUrl || null, slug]);
+    res.json({ message: 'Blog uspešno objavljen!', blogId: result.rows[0].id, slug });
   } catch (err) {
     console.error(err);
     res.status(500).json({ error: 'Greška na serveru' });

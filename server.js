@@ -1362,6 +1362,209 @@ app.delete('/blog/:id', async (req, res) => {
   } catch (err) { res.status(500).json({ error: 'Greška pri brisanju' }); }
 });
 
+// ============================================================================
+// ===== STATISTIKA POSETA (profil / proizvod / kontakt) + ČESTITKE PRODAVCIMA =====
+// Ne menja nijednu postojeću rutu. Stara ruta /prijavi-klik-telefon i dalje radi.
+// ============================================================================
+
+const cryptoStat = require('crypto');
+
+// Tabela događaja (pravi se sama pri startu servera ako ne postoji)
+(async () => {
+  try {
+    await pool.query(`CREATE TABLE IF NOT EXISTS dogadjaji (
+      id SERIAL PRIMARY KEY,
+      tip TEXT NOT NULL,
+      prodavac_id INTEGER NOT NULL,
+      proizvod_id INTEGER,
+      izvor TEXT,
+      visitor_id TEXT,
+      created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+    )`);
+    await pool.query(`CREATE INDEX IF NOT EXISTS dogadjaji_prodavac_vreme_idx ON dogadjaji (prodavac_id, created_at)`);
+    console.log('Tabela dogadjaji spremna.');
+  } catch (err) {
+    console.error('Greška pri pravljenju tabele dogadjaji:', err.message);
+  }
+})();
+
+const DOZVOLJENI_DOGADJAJI = ['profil', 'proizvod', 'telefon', 'viber', 'whatsapp', 'poruka'];
+const KONTAKT_DOGADJAJI = ['telefon', 'viber', 'whatsapp', 'poruka'];
+const BOT_REGEX = /bot|crawl|spider|slurp|facebookexternalhit|preview|headless|lighthouse|pingdom|uptime|monitor|curl|wget|python-requests|axios|node-fetch|go-http-client/i;
+
+// Odakle je posetilac došao (na osnovu document.referrer koji šalje frontend)
+function izvorPosete(ref) {
+  if (!ref || typeof ref !== 'string') return 'direktno';
+  let host = '';
+  try { host = new URL(ref).hostname.toLowerCase(); } catch (e) { return 'ostalo'; }
+  if (host.endsWith('lokalniplodovi.rs')) return 'sajt';
+  if (host.endsWith('railway.app')) return 'podela';           // link iz "Podeli" dugmeta (FB/IG share stranica)
+  if (/(^|\.)google\./.test(host)) return 'google';
+  if (/(^|\.)(facebook\.com|fb\.com|fb\.me|fb\.watch|m\.me)$/.test(host)) return 'facebook';
+  if (/(^|\.)instagram\.com$/.test(host)) return 'instagram';
+  if (/(^|\.)(bing\.com|duckduckgo\.com|yahoo\.com|yandex\.com)$/.test(host)) return 'pretrazivac';
+  if (/(^|\.)(viber\.com|wa\.me|whatsapp\.com)$/.test(host)) return 'poruke';
+  return 'ostalo';
+}
+
+function escapeHtmlStat(s) {
+  return String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+}
+
+// Beleži događaj. Ne broji: prodavca koji gleda sopstveni profil, admina, botove,
+// i isti uređaj koji ponovi isti događaj u roku od 30 minuta.
+app.post('/dogadjaj', async (req, res) => {
+  try {
+    const { tip, prodavac_id, proizvod_id, referrer, visitor_id } = req.body || {};
+    const prodavacId = parseInt(prodavac_id);
+    let proizvodId = proizvod_id ? parseInt(proizvod_id) : null;
+    if (Number.isNaN(proizvodId)) proizvodId = null;
+    if (!DOZVOLJENI_DOGADJAJI.includes(tip) || !prodavacId) {
+      return res.status(400).json({ error: 'Neispravni podaci' });
+    }
+
+    const ua = req.headers['user-agent'] || '';
+    if (BOT_REGEX.test(ua)) return res.json({ ok: true, brojano: false, razlog: 'bot' });
+
+    // Admin (šalje x-admin-password) se ne broji
+    const adminLozinka = req.headers['x-admin-password'];
+    if (adminLozinka && adminLozinka === process.env.ADMIN_PASSWORD) {
+      return res.json({ ok: true, brojano: false, razlog: 'admin' });
+    }
+
+    // Prodavac koji je prijavljen i gleda SVOJ profil/proizvode se ne broji
+    const token = req.headers.authorization?.split(' ')[1];
+    if (token) {
+      try {
+        const decoded = jwt.verify(token, JWT_SECRET);
+        if (decoded.userId === prodavacId) return res.json({ ok: true, brojano: false, razlog: 'vlasnik' });
+      } catch (e) { /* nevažeći token = tretira se kao običan posetilac */ }
+    }
+
+    const vid = (typeof visitor_id === 'string' && visitor_id.length >= 8 && visitor_id.length <= 64)
+      ? visitor_id
+      : cryptoStat.createHash('sha256').update(String(req.headers['x-forwarded-for'] || req.ip || '') + ua).digest('hex').slice(0, 32);
+
+    const izvor = izvorPosete(referrer);
+
+    const result = await pool.query(
+      `INSERT INTO dogadjaji (tip, prodavac_id, proizvod_id, izvor, visitor_id)
+       SELECT $1::text, $2::int, $3::int, $4::text, $5::text
+       WHERE EXISTS (SELECT 1 FROM users WHERE id = $2::int)
+         AND NOT EXISTS (
+           SELECT 1 FROM dogadjaji
+           WHERE visitor_id = $5::text AND tip = $1::text AND prodavac_id = $2::int
+             AND COALESCE(proizvod_id, 0) = COALESCE($3::int, 0)
+             AND created_at > NOW() - INTERVAL '30 minutes'
+         )`,
+      [tip, prodavacId, proizvodId, izvor, vid]
+    );
+    res.json({ ok: true, brojano: result.rowCount > 0 });
+  } catch (err) {
+    console.error('Događaj greška:', err.message);
+    res.status(500).json({ error: 'Greška na serveru' });
+  }
+});
+
+// Admin: pregled poseta po prodavcima, po danima i po izvorima (za zadnjih ?dana=7)
+app.get('/admin/statistika-poseta', adminAuth, async (req, res) => {
+  try {
+    let dana = parseInt(req.query.dana);
+    if (!dana || dana < 1) dana = 7;
+    if (dana > 365) dana = 365;
+
+    const prodavci = await pool.query(
+      `SELECT u.id, u.ime, u.lokacija, u.aktivan,
+              COUNT(d.id) FILTER (WHERE d.tip = 'profil') AS profil,
+              COUNT(DISTINCT d.visitor_id) FILTER (WHERE d.tip = 'profil') AS posetilaca,
+              COUNT(d.id) FILTER (WHERE d.tip = 'proizvod') AS proizvod,
+              COUNT(d.id) FILTER (WHERE d.tip = ANY($2::text[])) AS kontakt,
+              COUNT(d.id) FILTER (WHERE d.tip = 'telefon') AS telefon
+       FROM users u
+       LEFT JOIN dogadjaji d ON d.prodavac_id = u.id AND d.created_at > NOW() - make_interval(days => $1::int)
+       WHERE (u.tip = 'prodavac' OR u.tip IS NULL)
+       GROUP BY u.id, u.ime, u.lokacija, u.aktivan
+       ORDER BY profil DESC, kontakt DESC, u.ime ASC`,
+      [dana, KONTAKT_DOGADJAJI]
+    );
+
+    const poDanima = await pool.query(
+      `SELECT d.created_at::date AS dan,
+              COUNT(*) FILTER (WHERE d.tip = 'profil') AS profil,
+              COUNT(*) FILTER (WHERE d.tip = 'proizvod') AS proizvod,
+              COUNT(*) FILTER (WHERE d.tip = ANY($2::text[])) AS kontakt
+       FROM dogadjaji d
+       WHERE d.created_at > NOW() - make_interval(days => $1::int)
+       GROUP BY dan ORDER BY dan ASC`,
+      [dana, KONTAKT_DOGADJAJI]
+    );
+
+    const izvori = await pool.query(
+      `SELECT COALESCE(izvor, 'direktno') AS izvor, COUNT(*) AS broj
+       FROM dogadjaji
+       WHERE tip = 'profil' AND created_at > NOW() - make_interval(days => $1::int)
+       GROUP BY izvor ORDER BY broj DESC`,
+      [dana]
+    );
+
+    const ukupno = await pool.query(
+      `SELECT COUNT(*) FILTER (WHERE tip = 'profil') AS profil,
+              COUNT(*) FILTER (WHERE tip = 'proizvod') AS proizvod,
+              COUNT(*) FILTER (WHERE tip = ANY($2::text[])) AS kontakt,
+              COUNT(DISTINCT visitor_id) AS posetilaca
+       FROM dogadjaji WHERE created_at > NOW() - make_interval(days => $1::int)`,
+      [dana, KONTAKT_DOGADJAJI]
+    );
+
+    res.json({ dana, ukupno: ukupno.rows[0], prodavci: prodavci.rows, poDanima: poDanima.rows, izvori: izvori.rows });
+  } catch (err) {
+    console.error('Statistika poseta greška:', err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Admin: šalje čestitku prodavcu. Push ako ima uključena obaveštenja, inače email.
+app.post('/admin/posalji-cestitku', adminAuth, async (req, res) => {
+  try {
+    const { userId, poruka, naslov } = req.body || {};
+    const tekst = (poruka || '').toString().trim();
+    if (!userId || !tekst) return res.status(400).json({ error: 'Nedostaje prodavac ili poruka' });
+
+    const u = await pool.query('SELECT id, ime, email FROM users WHERE id = $1', [userId]);
+    const prodavac = u.rows[0];
+    if (!prodavac) return res.status(404).json({ error: 'Prodavac nije pronađen' });
+
+    const naslovFinal = (naslov || '').toString().trim() || '🎉 Čestitamo!';
+    const subs = await pool.query('SELECT COUNT(*) FROM push_subscriptions WHERE "userId" = $1', [userId]);
+
+    if (parseInt(subs.rows[0].count) > 0) {
+      await posaljiPushNotifikaciju(userId, naslovFinal, tekst.substring(0, 200), '/moj-profil.html');
+      return res.json({ message: `Push obaveštenje poslato prodavcu ${prodavac.ime}`, kanal: 'push' });
+    }
+
+    if (prodavac.email) {
+      await brevoPosaljiMejl(
+        prodavac.email,
+        naslovFinal,
+        `<div style="font-family:Arial,sans-serif;max-width:500px;margin:0 auto;padding:20px;">
+          <h2 style="color:#2e7d32;">🌿 LokalniPlodovi</h2>
+          <p>Pozdrav <strong>${escapeHtmlStat(prodavac.ime || '')}</strong>,</p>
+          <div style="background:#f5f5f5;padding:15px;border-radius:8px;">${escapeHtmlStat(tekst).replace(/\n/g, '<br>')}</div>
+          <a href="https://lokalniplodovi.rs/moj-profil.html" style="display:inline-block;background:#2e7d32;color:white;padding:12px 24px;border-radius:8px;text-decoration:none;margin-top:10px;">Otvori profil</a>
+          <p style="color:#999;font-size:12px;margin-top:30px;">LokalniPlodovi • lokalniplodovi.rs</p>
+        </div>`
+      );
+      return res.json({ message: `Prodavac ${prodavac.ime} nema uključena obaveštenja — poslato mejlom`, kanal: 'email' });
+    }
+
+    res.status(400).json({ error: 'Prodavac nema ni push obaveštenja ni email' });
+  } catch (err) {
+    console.error('Čestitka greška:', err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+// ===== KRAJ: STATISTIKA POSETA + ČESTITKE =====
+
 const port = process.env.PORT || 3000;
 app.listen(port, () => {
   console.log(`Server startovan na portu ${port}`);

@@ -191,6 +191,8 @@ async function initDB() {
     await pool.query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS aktivan BOOLEAN DEFAULT true`);
     await pool.query(`CREATE TABLE IF NOT EXISTS proizvodi (id SERIAL PRIMARY KEY, "userId" INTEGER, naziv TEXT, opis TEXT, cena NUMERIC, kolicina NUMERIC, "glavnaNisa" TEXT, podnisa TEXT, created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP)`);
     await pool.query(`ALTER TABLE proizvodi ADD COLUMN IF NOT EXISTS slika TEXT`);
+    // Redosled proizvoda na tezgi (prodavac sam bira koji ide prvi). NULL = nije zadat, ostaje stari redosled.
+    await pool.query(`ALTER TABLE proizvodi ADD COLUMN IF NOT EXISTS redosled INTEGER`);
     await pool.query(`CREATE TABLE IF NOT EXISTS objave (id SERIAL PRIMARY KEY, "userId" INTEGER NOT NULL, tekst TEXT NOT NULL, slika TEXT, created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP)`);
     await pool.query(`ALTER TABLE objave ADD COLUMN IF NOT EXISTS slika TEXT`);
     await pool.query(`ALTER TABLE objave ADD COLUMN IF NOT EXISTS video TEXT`);
@@ -692,7 +694,10 @@ app.get('/proizvodi', async (req, res) => {
     if (podnisa)    { sql += ` AND LOWER(p.podnisa) = LOWER($${i++})`; params.push(podnisa); }
     if (userId)     { sql += ` AND p."userId" = $${i++}`; params.push(userId); }
     else            { sql += ` AND u.aktivan IS NOT FALSE`; }
-    sql += ` ORDER BY p.created_at DESC`;
+    // Kad se gleda tezga jednog prodavca, poštuje se redosled koji je sam zadao (NULL ide na kraj,
+    // a među njima ostaje stari redosled po datumu). Za sve ostale liste ništa se ne menja.
+    if (userId) sql += ` ORDER BY p.redosled ASC NULLS LAST, p.created_at DESC`;
+    else        sql += ` ORDER BY p.created_at DESC`;
     const result = await pool.query(sql, params);
     // Stare base64 slike (data:image/...) su ogromne — ne šalju se u listi,
     // samo Cloudinary linkovi (http...). Drastično smanjuje veličinu odgovora.
@@ -729,6 +734,31 @@ app.put('/proizvod/:id', async (req, res) => {
   } catch (err) {
     console.error(err);
     res.status(500).json({ error: 'Greška pri izmeni proizvoda' });
+  }
+});
+
+// Čuva redosled proizvoda na tezgi. Frontend šalje { redosled: [id1, id2, id3, ...] }
+// u željenom poretku. Menjaju se samo proizvodi koji pripadaju prijavljenom prodavcu.
+app.put('/proizvodi-redosled', async (req, res) => {
+  const token = req.headers.authorization?.split(' ')[1];
+  if (!token) return res.status(401).json({ error: 'Niste ulogovani' });
+  try {
+    const decoded = jwt.verify(token, JWT_SECRET);
+    const { redosled } = req.body;
+    if (!Array.isArray(redosled) || redosled.length === 0) return res.status(400).json({ error: 'Nema redosleda za čuvanje' });
+    if (redosled.length > 500) return res.status(400).json({ error: 'Previše proizvoda odjednom' });
+    const ids = redosled.map(x => parseInt(x)).filter(x => Number.isInteger(x));
+    if (ids.length !== redosled.length) return res.status(400).json({ error: 'Neispravan redosled' });
+    await pool.query(
+      `UPDATE proizvodi SET redosled = v.pozicija
+       FROM (SELECT t.id, (t.ord - 1)::int AS pozicija FROM unnest($1::int[]) WITH ORDINALITY AS t(id, ord)) v
+       WHERE proizvodi.id = v.id AND proizvodi."userId" = $2`,
+      [ids, decoded.userId]
+    );
+    res.json({ message: 'Redosled sačuvan' });
+  } catch (err) {
+    console.error('Redosled greška:', err);
+    res.status(500).json({ error: 'Greška pri čuvanju redosleda' });
   }
 });
 

@@ -253,6 +253,33 @@ async function initDB() {
     )`);
     // ===============================================================
 
+    // ===== OGLASNIK =====
+    await pool.query(`CREATE TABLE IF NOT EXISTS oglasi (
+      id SERIAL PRIMARY KEY,
+      user_id INTEGER NOT NULL,
+      naslov TEXT NOT NULL,
+      opis TEXT NOT NULL,
+      kategorija TEXT NOT NULL,
+      cena NUMERIC,
+      mesto TEXT NOT NULL,
+      telefon TEXT NOT NULL,
+      slike TEXT DEFAULT '[]',
+      istice TIMESTAMPTZ NOT NULL,
+      istaknut_do TIMESTAMPTZ,
+      aktivan BOOLEAN DEFAULT TRUE,
+      prijave INTEGER DEFAULT 0,
+      created_at TIMESTAMPTZ DEFAULT NOW()
+    )`);
+    await pool.query(`CREATE INDEX IF NOT EXISTS oglasi_istice_idx ON oglasi (istice)`);
+    await pool.query(`CREATE TABLE IF NOT EXISTS baner_klikovi (
+      id SERIAL PRIMARY KEY,
+      baner TEXT NOT NULL,
+      visitor_id TEXT,
+      created_at TIMESTAMPTZ DEFAULT NOW()
+    )`);
+    await pool.query(`CREATE INDEX IF NOT EXISTS baner_klikovi_idx ON baner_klikovi (baner, created_at)`);
+    // ====================
+
     console.log('Baza inicijalizovana uspešno!');
   } catch (err) {
     console.error('Greška pri inicijalizaciji baze:', err.message);
@@ -426,6 +453,49 @@ app.post('/register-kupac', async (req, res) => {
   } catch (err) {
     if (err.code === '23505') return res.status(409).json({ error: 'Email već postoji' });
     console.error(err);
+    res.status(500).json({ error: 'Greška na serveru' });
+  }
+});
+
+// ===== REGISTRACIJA OGLAŠIVAČA (nalog samo za oglasnik, tip 'oglasivac') =====
+// Takav korisnik se ne pojavljuje u listi prodavaca, na mapi, ni u broju kupaca.
+const regPokusaji = new Map();
+setInterval(() => regPokusaji.clear(), 60 * 60 * 1000);
+function regDozvoljeno(ip) {
+  const lista = (regPokusaji.get(ip) || []);
+  if (lista.length >= 5) return false;   // najviše 5 registracija po adresi na sat
+  lista.push(Date.now()); regPokusaji.set(ip, lista);
+  return true;
+}
+
+app.post('/register-oglasivac', async (req, res) => {
+  try {
+    const b = req.body || {};
+    // skriveno polje koje popunjavaju samo botovi: lažan uspeh, ništa se ne upisuje
+    if (b.website) return res.status(201).json({ message: 'Registracija uspešna' });
+    const ip = (req.headers['x-forwarded-for'] || req.ip || '').toString().split(',')[0].trim();
+    if (!regDozvoljeno(ip)) return res.status(429).json({ error: 'Previše pokušaja registracije. Pokušajte ponovo kasnije.' });
+
+    const ime = (b.ime || '').toString().trim();
+    const email = (b.email || '').toString().trim().toLowerCase();
+    const telefon = (b.telefon || '').toString().trim();
+    const lozinka = (b.lozinka || '').toString();
+    if (ime.length < 2 || ime.length > 60) return res.status(400).json({ error: 'Unesite ime (2-60 karaktera)' });
+    if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) return res.status(400).json({ error: 'Email adresa nije ispravna' });
+    if (telefon.length < 6 || telefon.length > 30) return res.status(400).json({ error: 'Unesite ispravan broj telefona' });
+    if (lozinka.length < 6) return res.status(400).json({ error: 'Lozinka mora imati najmanje 6 karaktera' });
+
+    const hashedPassword = await bcrypt.hash(lozinka, 10);
+    const result = await pool.query(
+      `INSERT INTO users (ime, email, password, telefon, lokacija, nise, opis, tip) VALUES ($1, $2, $3, $4, null, '[]', null, 'oglasivac') RETURNING id`,
+      [ime, email, hashedPassword, telefon]
+    );
+    const userId = result.rows[0].id;
+    const token = jwt.sign({ userId, email, tip: 'oglasivac' }, JWT_SECRET, { expiresIn: '90d' });
+    res.status(201).json({ message: 'Registracija uspešna', token, user: { id: userId, ime, email, tip: 'oglasivac' } });
+  } catch (err) {
+    if (err.code === '23505') return res.status(409).json({ error: 'Nalog sa ovim emailom već postoji. Prijavite se.' });
+    console.error('Registracija oglašivača greška:', err.message);
     res.status(500).json({ error: 'Greška na serveru' });
   }
 });
@@ -941,6 +1011,7 @@ app.delete('/admin/korisnik/:id', adminAuth, async (req, res) => {
     await pool.query('DELETE FROM proizvodi WHERE "userId" = $1', [req.params.id]);
     await pool.query('DELETE FROM objave WHERE "userId" = $1', [req.params.id]);
     await pool.query('DELETE FROM blogovi WHERE "userId" = $1', [req.params.id]);
+    await pool.query('DELETE FROM oglasi WHERE user_id = $1', [req.params.id]);
     await pool.query('DELETE FROM poruke WHERE od_user_id = $1 OR ka_user_id = $1', [req.params.id]);
     await pool.query('DELETE FROM ocene WHERE od_user_id = $1 OR za_user_id = $1', [req.params.id]);
     await pool.query('DELETE FROM lista_zelja WHERE user_id = $1', [req.params.id]);
@@ -1059,6 +1130,211 @@ app.post('/admin/grupni-email', adminAuth, async (req, res) => {
     }).catch(e => console.error('Grupni email greška:', e.message));
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
+
+// ===== OGLASNIK (oglasi iz poljoprivrede; svaki oglas sam ističe posle 30 dana) =====
+const OGLASI_KATEGORIJE = ['Mašine i oprema', 'Zemljište i objekti', 'Životinje', 'Seme, sadnice i đubrivo', 'Usluge', 'Ostalo'];
+const OGLAS_DANA = 30;
+const OGLASI_MAX_PO_KORISNIKU = 10;
+
+function oglasZaPrikaz(r, skratiOpis) {
+  let slike = [];
+  try { slike = JSON.parse(r.slike || '[]'); } catch (e) {}
+  return {
+    id: r.id, naslov: r.naslov,
+    opis: skratiOpis ? (r.opis || '').slice(0, 160) : r.opis,
+    kategorija: r.kategorija, cena: r.cena === null ? null : Number(r.cena),
+    mesto: r.mesto, slike, istice: r.istice, created_at: r.created_at,
+    istaknut: !!(r.istaknut_do && new Date(r.istaknut_do) > new Date()),
+    autorIme: r.autorIme, korisnikId: r.user_id
+  };
+}
+
+function oglasKorisnik(req) {
+  const token = req.headers.authorization?.split(' ')[1];
+  if (!token) return null;
+  try { return jwt.verify(token, JWT_SECRET); } catch (e) { return null; }
+}
+
+app.get('/oglasi', async (req, res) => {
+  try {
+    const { kategorija, q, mesto } = req.query;
+    const limit = Math.min(parseInt(req.query.limit) || 24, 48);
+    const offset = Math.max(parseInt(req.query.offset) || 0, 0);
+    let sql = `SELECT o.*, u.ime as "autorIme" FROM oglasi o JOIN users u ON o.user_id = u.id WHERE o.aktivan = TRUE AND o.istice > NOW()`;
+    const params = []; let i = 1;
+    if (kategorija && OGLASI_KATEGORIJE.includes(kategorija)) { sql += ` AND o.kategorija = $${i++}`; params.push(kategorija); }
+    if (q && q.trim()) { sql += ` AND (o.naslov ILIKE $${i} OR o.opis ILIKE $${i})`; params.push(`%${q.trim()}%`); i++; }
+    if (mesto && mesto.trim()) { sql += ` AND o.mesto ILIKE $${i++}`; params.push(`%${mesto.trim()}%`); }
+    sql += ` ORDER BY (o.istaknut_do IS NOT NULL AND o.istaknut_do > NOW()) DESC, o.created_at DESC LIMIT $${i++} OFFSET $${i++}`;
+    params.push(limit + 1, offset);
+    const r = await pool.query(sql, params);
+    res.json({ oglasi: r.rows.slice(0, limit).map(x => oglasZaPrikaz(x, true)), imaJos: r.rows.length > limit });
+  } catch (err) {
+    console.error('Oglasi greška:', err.message);
+    res.status(500).json({ error: 'Greška pri učitavanju oglasa' });
+  }
+});
+
+app.get('/moji-oglasi', async (req, res) => {
+  const k = oglasKorisnik(req);
+  if (!k) return res.status(401).json({ error: 'Niste ulogovani' });
+  try {
+    const r = await pool.query(`SELECT o.*, u.ime as "autorIme" FROM oglasi o JOIN users u ON o.user_id = u.id WHERE o.user_id = $1 ORDER BY o.created_at DESC`, [k.userId]);
+    res.json(r.rows.map(x => ({ ...oglasZaPrikaz(x, true), skinut: x.aktivan === false, istekao: new Date(x.istice) <= new Date() })));
+  } catch (err) { res.status(500).json({ error: 'Greška na serveru' }); }
+});
+
+app.get('/oglasi/:id', async (req, res) => {
+  try {
+    const r = await pool.query(`SELECT o.*, u.ime as "autorIme" FROM oglasi o JOIN users u ON o.user_id = u.id WHERE o.id = $1 AND o.aktivan = TRUE AND o.istice > NOW()`, [parseInt(req.params.id) || 0]);
+    if (!r.rows[0]) return res.status(404).json({ error: 'Oglas nije pronađen ili je istekao' });
+    res.json(oglasZaPrikaz(r.rows[0], false));
+  } catch (err) { res.status(500).json({ error: 'Greška na serveru' }); }
+});
+
+// Telefon se ne šalje u listi, samo na klik (da ga ne mogu masovno pokupiti botovi)
+app.get('/oglasi/:id/telefon', async (req, res) => {
+  try {
+    const r = await pool.query(`SELECT telefon FROM oglasi WHERE id = $1 AND aktivan = TRUE AND istice > NOW()`, [parseInt(req.params.id) || 0]);
+    if (!r.rows[0]) return res.status(404).json({ error: 'Oglas nije pronađen' });
+    res.json({ telefon: r.rows[0].telefon });
+  } catch (err) { res.status(500).json({ error: 'Greška na serveru' }); }
+});
+
+app.post('/oglasi', async (req, res) => {
+  const k = oglasKorisnik(req);
+  if (!k) return res.status(401).json({ error: 'Morate biti prijavljeni da biste postavili oglas' });
+  try {
+    const naslov = (req.body.naslov || '').toString().trim();
+    const opis = (req.body.opis || '').toString().trim();
+    const kategorija = (req.body.kategorija || '').toString().trim();
+    const mesto = (req.body.mesto || '').toString().trim();
+    const telefon = (req.body.telefon || '').toString().trim();
+    let cena = null;
+    if (req.body.cena !== null && req.body.cena !== undefined && req.body.cena !== '') {
+      cena = parseFloat(req.body.cena);
+      if (isNaN(cena) || cena < 0) return res.status(400).json({ error: 'Cena nije ispravna' });
+    }
+    if (naslov.length < 5 || naslov.length > 100) return res.status(400).json({ error: 'Naslov mora imati između 5 i 100 karaktera' });
+    if (opis.length < 20 || opis.length > 3000) return res.status(400).json({ error: 'Opis mora imati između 20 i 3000 karaktera' });
+    if (!OGLASI_KATEGORIJE.includes(kategorija)) return res.status(400).json({ error: 'Izaberite kategoriju' });
+    if (!mesto || mesto.length > 80) return res.status(400).json({ error: 'Unesite mesto' });
+    if (telefon.length < 6 || telefon.length > 30) return res.status(400).json({ error: 'Unesite ispravan broj telefona' });
+    const slike = (Array.isArray(req.body.slike) ? req.body.slike : [])
+      .filter(u => typeof u === 'string' && u.startsWith('https://res.cloudinary.com/')).slice(0, 3);
+
+    const aktivnih = await pool.query(`SELECT COUNT(*) FROM oglasi WHERE user_id = $1 AND aktivan = TRUE AND istice > NOW()`, [k.userId]);
+    if (parseInt(aktivnih.rows[0].count) >= OGLASI_MAX_PO_KORISNIKU) {
+      return res.status(400).json({ error: `Možete imati najviše ${OGLASI_MAX_PO_KORISNIKU} aktivnih oglasa. Skinite one koji su prodati.` });
+    }
+    const r = await pool.query(
+      `INSERT INTO oglasi (user_id, naslov, opis, kategorija, cena, mesto, telefon, slike, istice)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, NOW() + make_interval(days => $9::int)) RETURNING id`,
+      [k.userId, naslov, opis, kategorija, cena, mesto, telefon, JSON.stringify(slike), OGLAS_DANA]
+    );
+    res.status(201).json({ message: 'Oglas je objavljen!', id: r.rows[0].id });
+  } catch (err) {
+    console.error('Oglas greška:', err.message);
+    res.status(500).json({ error: 'Greška pri objavljivanju oglasa' });
+  }
+});
+
+app.delete('/oglasi/:id', async (req, res) => {
+  const k = oglasKorisnik(req);
+  if (!k) return res.status(401).json({ error: 'Niste ulogovani' });
+  try {
+    const r = await pool.query(`DELETE FROM oglasi WHERE id = $1 AND user_id = $2`, [parseInt(req.params.id) || 0, k.userId]);
+    if (r.rowCount === 0) return res.status(404).json({ error: 'Oglas nije pronađen' });
+    res.json({ message: 'Oglas je skinut' });
+  } catch (err) { res.status(500).json({ error: 'Greška na serveru' }); }
+});
+
+app.post('/oglasi/:id/obnovi', async (req, res) => {
+  const k = oglasKorisnik(req);
+  if (!k) return res.status(401).json({ error: 'Niste ulogovani' });
+  try {
+    const r = await pool.query(`UPDATE oglasi SET istice = NOW() + make_interval(days => $3::int) WHERE id = $1 AND user_id = $2 RETURNING istice`, [parseInt(req.params.id) || 0, k.userId, OGLAS_DANA]);
+    if (!r.rows[0]) return res.status(404).json({ error: 'Oglas nije pronađen' });
+    res.json({ message: `Oglas je obnovljen na još ${OGLAS_DANA} dana`, istice: r.rows[0].istice });
+  } catch (err) { res.status(500).json({ error: 'Greška na serveru' }); }
+});
+
+app.post('/oglasi/:id/prijavi', async (req, res) => {
+  try {
+    await pool.query(`UPDATE oglasi SET prijave = prijave + 1 WHERE id = $1`, [parseInt(req.params.id) || 0]);
+    res.json({ message: 'Hvala, pregledaćemo oglas.' });
+  } catch (err) { res.status(500).json({ error: 'Greška na serveru' }); }
+});
+
+// ----- Admin -----
+app.get('/admin/oglasi', adminAuth, async (req, res) => {
+  try {
+    const r = await pool.query(`SELECT o.*, u.ime as "autorIme", u.email as "autorEmail" FROM oglasi o JOIN users u ON o.user_id = u.id ORDER BY o.prijave DESC, o.created_at DESC`);
+    res.json(r.rows.map(x => ({ ...oglasZaPrikaz(x, true), autorEmail: x.autorEmail, telefon: x.telefon, prijave: x.prijave, skinut: x.aktivan === false, istekao: new Date(x.istice) <= new Date(), istaknutDo: x.istaknut_do })));
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+app.delete('/admin/oglas/:id', adminAuth, async (req, res) => {
+  try {
+    await pool.query(`DELETE FROM oglasi WHERE id = $1`, [parseInt(req.params.id) || 0]);
+    res.json({ message: 'Oglas obrisan' });
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+app.post('/admin/oglas/:id/sakrij', adminAuth, async (req, res) => {
+  try {
+    await pool.query(`UPDATE oglasi SET aktivan = $2 WHERE id = $1`, [parseInt(req.params.id) || 0, req.body.sakrij === false]);
+    res.json({ message: 'Status oglasa promenjen' });
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+// Posle uplate: istakni oglas na 15 dana (i produži istek ako bi oglas pre toga istekao)
+app.post('/admin/oglas/:id/istakni', adminAuth, async (req, res) => {
+  const dana = Math.min(parseInt(req.body.dana) || 15, 90);
+  try {
+    const r = await pool.query(
+      `UPDATE oglasi SET
+         istaknut_do = GREATEST(COALESCE(istaknut_do, NOW()), NOW()) + make_interval(days => $2::int),
+         istice = GREATEST(istice, GREATEST(COALESCE(istaknut_do, NOW()), NOW()) + make_interval(days => $2::int))
+       WHERE id = $1 RETURNING istaknut_do`,
+      [parseInt(req.params.id) || 0, dana]
+    );
+    if (!r.rows[0]) return res.status(404).json({ error: 'Oglas nije pronađen' });
+    res.json({ message: `Oglas je istaknut do ${new Date(r.rows[0].istaknut_do).toLocaleDateString('sr-RS')}` });
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+// ===== KRAJ: OGLASNIK =====
+
+// ===== BROJAČ KLIKOVA NA BANERE (Lokalni Plodovi <-> Oglasnik) =====
+const BANERI = ['lp-u-oglasnik', 'oglasnik-u-lp'];
+
+app.post('/baner-klik', async (req, res) => {
+  try {
+    const { baner, visitor_id } = req.body || {};
+    if (!BANERI.includes(baner)) return res.status(400).json({ error: 'Nepoznat baner' });
+    if (/bot|crawl|spider|slurp|preview|headless|lighthouse|curl|wget/i.test(req.headers['user-agent'] || '')) return res.json({ ok: true, brojano: false });
+    const vid = (typeof visitor_id === 'string' && visitor_id.length >= 8 && visitor_id.length <= 64) ? visitor_id : null;
+    // isti uređaj ne računa dvostruki klik (klik + auxclick) u roku od 10 sekundi
+    const r = await pool.query(
+      `INSERT INTO baner_klikovi (baner, visitor_id)
+       SELECT $1::text, $2::text
+       WHERE NOT EXISTS (SELECT 1 FROM baner_klikovi WHERE baner = $1::text AND visitor_id = $2::text AND created_at > NOW() - INTERVAL '10 seconds')`,
+      [baner, vid]
+    );
+    res.json({ ok: true, brojano: r.rowCount > 0 });
+  } catch (err) { res.status(500).json({ error: 'Greška na serveru' }); }
+});
+
+app.get('/admin/baner-klikovi', adminAuth, async (req, res) => {
+  try {
+    let dana = parseInt(req.query.dana); if (!dana || dana < 1) dana = 30; if (dana > 365) dana = 365;
+    const period = await pool.query(`SELECT baner, COUNT(*)::int AS klikova, COUNT(DISTINCT visitor_id)::int AS posetilaca FROM baner_klikovi WHERE created_at > NOW() - make_interval(days => $1::int) GROUP BY baner`, [dana]);
+    const svega = await pool.query(`SELECT baner, COUNT(*)::int AS klikova FROM baner_klikovi GROUP BY baner`);
+    const poDanima = await pool.query(`SELECT created_at::date AS dan, baner, COUNT(*)::int AS klikova FROM baner_klikovi WHERE created_at > NOW() - make_interval(days => $1::int) GROUP BY dan, baner ORDER BY dan DESC`, [dana]);
+    res.json({ dana, period: period.rows, svega: svega.rows, poDanima: poDanima.rows });
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+// ===== KRAJ: BROJAČ BANERA =====
 
 // ===== ADMIN BLOG =====
 app.get('/admin/blogovi', adminAuth, async (req, res) => {

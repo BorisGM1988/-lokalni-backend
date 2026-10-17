@@ -280,6 +280,18 @@ async function initDB() {
     await pool.query(`CREATE INDEX IF NOT EXISTS baner_klikovi_idx ON baner_klikovi (baner, created_at)`);
     // ====================
 
+    // ===== RESET LOZINKE (tokeni za "Zaboravljena lozinka") =====
+    // Čuva se samo hash tokena, pa ni ko vidi bazu ne može da iskoristi link.
+    await pool.query(`CREATE TABLE IF NOT EXISTS reset_tokeni (
+      id SERIAL PRIMARY KEY,
+      user_id INTEGER NOT NULL,
+      token_hash TEXT NOT NULL UNIQUE,
+      expires_at TIMESTAMPTZ NOT NULL,
+      created_at TIMESTAMPTZ DEFAULT NOW()
+    )`);
+    await pool.query(`CREATE INDEX IF NOT EXISTS reset_tokeni_user_idx ON reset_tokeni (user_id)`);
+    // ============================================================
+
     console.log('Baza inicijalizovana uspešno!');
   } catch (err) {
     console.error('Greška pri inicijalizaciji baze:', err.message);
@@ -603,6 +615,104 @@ app.post('/promeni-lozinku', async (req, res) => {
     res.status(500).json({ error: 'Greška pri promeni lozinke' });
   }
 });
+
+// ===== ZABORAVLJENA LOZINKA (link za novu lozinku stiže na email, važi 1 sat) =====
+// Važi za sve tipove naloga (prodavac, kupac, oglašivač).
+// 1) POST /zaboravljena-lozinka  { email }              -> šalje mejl sa linkom
+// 2) POST /nova-lozinka          { token, novaLozinka } -> postavlja novu lozinku
+const cryptoReset = require('crypto');
+const RESET_VAZI_MINUTA = 60;
+const RESET_STRANICA = 'https://lokalniplodovi.rs/nova-lozinka.html';
+
+const resetPokusaji = new Map();
+setInterval(() => resetPokusaji.clear(), 60 * 60 * 1000);
+function resetDozvoljeno(kljuc, max) {
+  const lista = resetPokusaji.get(kljuc) || [];
+  if (lista.length >= max) return false;
+  lista.push(Date.now()); resetPokusaji.set(kljuc, lista);
+  return true;
+}
+
+function hashResetTokena(token) {
+  return cryptoReset.createHash('sha256').update(token).digest('hex');
+}
+
+function resetIp(req) {
+  return (req.headers['x-forwarded-for'] || req.ip || '').toString().split(',')[0].trim();
+}
+
+// Radi u pozadini (posle odgovora korisniku), da vreme odgovora ne otkriva da li nalog postoji
+async function posaljiResetMejl(email) {
+  const r = await pool.query('SELECT id, ime, email FROM users WHERE LOWER(email) = $1 LIMIT 1', [email]);
+  const user = r.rows[0];
+  if (!user) return;
+  // stari neiskorišćeni linkovi ovog korisnika i svi istekli se brišu
+  await pool.query('DELETE FROM reset_tokeni WHERE user_id = $1 OR expires_at < NOW()', [user.id]);
+  const token = cryptoReset.randomBytes(32).toString('hex');
+  await pool.query(
+    `INSERT INTO reset_tokeni (user_id, token_hash, expires_at) VALUES ($1, $2, NOW() + make_interval(mins => $3::int))`,
+    [user.id, hashResetTokena(token), RESET_VAZI_MINUTA]
+  );
+  const link = `${RESET_STRANICA}?token=${token}`;
+  const imeBezbedno = escapeHtmlStat(user.ime || '');
+  await brevoPosaljiMejl(
+    user.email,
+    '🔑 Nova lozinka za LokalniPlodovi',
+    `<div style="font-family:Arial,sans-serif;max-width:500px;margin:0 auto;padding:20px;">
+      <h2 style="color:#2e7d32;">🌿 LokalniPlodovi</h2>
+      <p>Pozdrav <strong>${imeBezbedno}</strong>,</p>
+      <p>Primili smo zahtev za postavljanje nove lozinke. Kliknite na dugme ispod da je izaberete. Link važi ${RESET_VAZI_MINUTA} minuta i može da se iskoristi samo jednom.</p>
+      <a href="${link}" style="display:inline-block;background:#2e7d32;color:white;padding:12px 24px;border-radius:8px;text-decoration:none;margin-top:10px;">Postavi novu lozinku</a>
+      <p style="color:#666;font-size:13px;margin-top:20px;">Ako dugme ne radi, kopirajte ovaj link u pregledač:<br>${link}</p>
+      <p style="color:#666;font-size:13px;">Ako niste vi tražili promenu lozinke, slobodno ignorišite ovaj mejl. Vaša lozinka ostaje ista.</p>
+      <p style="color:#999;font-size:12px;margin-top:30px;">LokalniPlodovi • lokalniplodovi.rs</p>
+    </div>`
+  );
+  console.log('✅ Reset lozinke poslat na:', user.email);
+}
+
+app.post('/zaboravljena-lozinka', async (req, res) => {
+  try {
+    const email = ((req.body || {}).email || '').toString().trim().toLowerCase();
+    if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) return res.status(400).json({ error: 'Email adresa nije ispravna' });
+    // ograničenje: najviše 10 zahteva po IP adresi i 3 po email adresi na sat
+    if (!resetDozvoljeno('ip:' + resetIp(req), 10) || !resetDozvoljeno('mail:' + email, 3)) {
+      return res.status(429).json({ error: 'Previše pokušaja. Pokušajte ponovo za sat vremena.' });
+    }
+    // uvek isti odgovor, bez obzira da li nalog postoji
+    res.json({ message: 'Ako nalog sa tom email adresom postoji, poslali smo mejl sa linkom za novu lozinku.' });
+    posaljiResetMejl(email).catch(e => console.error('Reset lozinke greška:', e.message));
+  } catch (err) {
+    console.error('Zaboravljena lozinka greška:', err.message);
+    if (!res.headersSent) res.status(500).json({ error: 'Greška na serveru' });
+  }
+});
+
+app.post('/nova-lozinka', async (req, res) => {
+  try {
+    const b = req.body || {};
+    const token = (b.token || '').toString().trim();
+    const novaLozinka = (b.novaLozinka || '').toString();
+    if (!resetDozvoljeno('nova:' + resetIp(req), 20)) return res.status(429).json({ error: 'Previše pokušaja. Pokušajte ponovo kasnije.' });
+    if (!/^[a-f0-9]{64}$/.test(token)) return res.status(400).json({ error: 'Link nije ispravan ili je istekao. Zatražite novi.' });
+    if (novaLozinka.length < 6) return res.status(400).json({ error: 'Nova lozinka mora imati najmanje 6 karaktera' });
+    // jednokratno: link se troši u istom koraku u kom se proverava
+    const r = await pool.query(
+      'DELETE FROM reset_tokeni WHERE token_hash = $1 AND expires_at > NOW() RETURNING user_id',
+      [hashResetTokena(token)]
+    );
+    if (!r.rows[0]) return res.status(400).json({ error: 'Link nije ispravan ili je istekao. Zatražite novi.' });
+    const userId = r.rows[0].user_id;
+    const hashedPassword = await bcrypt.hash(novaLozinka, 10);
+    await pool.query('UPDATE users SET password = $1 WHERE id = $2', [hashedPassword, userId]);
+    await pool.query('DELETE FROM reset_tokeni WHERE user_id = $1', [userId]);
+    res.json({ message: 'Lozinka je uspešno promenjena! Sada se možete prijaviti.' });
+  } catch (err) {
+    console.error('Nova lozinka greška:', err.message);
+    res.status(500).json({ error: 'Greška na serveru' });
+  }
+});
+// ===== KRAJ: ZABORAVLJENA LOZINKA =====
 
 app.post('/objavi-novost', async (req, res) => {
   const token = req.headers.authorization?.split(' ')[1];

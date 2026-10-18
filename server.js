@@ -418,6 +418,64 @@ app.get('/random-proizvodi', async (req, res) => {
 });
 // =====================================
 
+// ===== ŽIVE BROJKE ZA POČETNU: koliko prodavaca/proizvoda ima po nišama =====
+// Prodavac se računa u nišu ako u njoj ima bar jedan proizvod. Računaju se samo aktivni prodavci
+// (isti kao na stranici "Svi prodavci"). Odgovor se čuva u memoriji 5 minuta da ne opterećuje bazu.
+function kljucNise(naziv) {
+  const t = normalizeText(String(naziv || '')).trim();
+  if (t.startsWith('voc')) return 'voce';
+  if (t.startsWith('povr')) return 'povrce';
+  if (t.startsWith('mle')) return 'mlecni';
+  if (t.startsWith('meso')) return 'meso';
+  if (t.startsWith('med')) return 'med';
+  if (t.startsWith('jaj')) return 'jaja';
+  if (t.startsWith('bilj') || t.startsWith('zdrav')) return 'zdravlje';
+  if (t.startsWith('domac')) return 'domaca-radinost';
+  return null;
+}
+
+let statNiseKes = null;
+let statNiseKesVreme = 0;
+const STAT_NISE_KES_MS = 5 * 60 * 1000;
+
+app.get('/statistika-nisa', async (req, res) => {
+  try {
+    if (statNiseKes && Date.now() - statNiseKesVreme < STAT_NISE_KES_MS) {
+      res.setHeader('Cache-Control', 'public, max-age=300');
+      return res.json(statNiseKes);
+    }
+    const prodavciUkupno = await pool.query(
+      `SELECT COUNT(*)::int AS broj FROM users WHERE (tip = 'prodavac' OR tip IS NULL) AND aktivan IS NOT FALSE`
+    );
+    const redovi = await pool.query(
+      `SELECT p."glavnaNisa" AS nisa, p."userId" AS uid, COUNT(*)::int AS n
+       FROM proizvodi p JOIN users u ON p."userId" = u.id
+       WHERE (u.tip = 'prodavac' OR u.tip IS NULL) AND u.aktivan IS NOT FALSE
+       GROUP BY p."glavnaNisa", p."userId"`
+    );
+    const nise = {};
+    const prodavciPoNisi = {};
+    let proizvodaUkupno = 0;
+    for (const r of redovi.rows) {
+      proizvodaUkupno += r.n;
+      const k = kljucNise(r.nisa);
+      if (!k) continue;
+      if (!nise[k]) { nise[k] = { prodavaca: 0, proizvoda: 0 }; prodavciPoNisi[k] = new Set(); }
+      nise[k].proizvoda += r.n;
+      prodavciPoNisi[k].add(r.uid);
+    }
+    for (const k of Object.keys(nise)) nise[k].prodavaca = prodavciPoNisi[k].size;
+    statNiseKes = { prodavaca: prodavciUkupno.rows[0].broj, proizvoda: proizvodaUkupno, nise };
+    statNiseKesVreme = Date.now();
+    res.setHeader('Cache-Control', 'public, max-age=300');
+    res.json(statNiseKes);
+  } catch (err) {
+    console.error('Statistika niša greška:', err.message);
+    res.status(500).json({ error: 'Greška na serveru' });
+  }
+});
+// =====================================
+
 // Beleži klik na broj telefona prodavca (signal namere kupovine)
 app.post('/prijavi-klik-telefon', async (req, res) => {
   const { prodavac_id } = req.body;

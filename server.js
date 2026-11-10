@@ -1471,6 +1471,34 @@ app.post('/admin/oglas/:id/istakni', adminAuth, async (req, res) => {
     res.json({ message: `Oglas je istaknut do ${new Date(r.rows[0].istaknut_do).toLocaleDateString('sr-RS')}` });
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
+
+// Deljenje oglasa na Facebook-u: stranica sa OG podacima (naslov, cena, mesto, slika), pa preusmerenje na oglas.
+// Telefon se ovde nikad ne prikazuje.
+app.get('/oglas-share/:id', async (req, res) => {
+  const id = parseInt(req.params.id) || 0;
+  const oglasnikUrl = 'https://lokalniplodovi.rs/oglasnik.html';
+  try {
+    const r = await pool.query(`SELECT naslov, opis, kategorija, cena, mesto, slike FROM oglasi WHERE id = $1 AND aktivan = TRUE AND istice > NOW()`, [id]);
+    if (!r.rows[0]) return res.redirect(oglasnikUrl);
+    const o = r.rows[0];
+    let slike = [];
+    try { slike = JSON.parse(o.slike || '[]'); } catch (e) {}
+    let slika = 'https://lokalniplodovi.rs/Oglasnik-hero.jpg';
+    if (slike[0] && slike[0].startsWith('https://res.cloudinary.com/') && slike[0].includes('/upload/')) {
+      slika = slike[0].replace('/upload/', '/upload/w_1200,h_630,c_fill,q_auto,f_jpg/');
+    }
+    const cenaTekst = (o.cena === null || o.cena === undefined) ? 'Po dogovoru' : Number(o.cena).toLocaleString('sr-RS') + ' RSD';
+    const naslov = escapeHtmlStat(`${o.naslov} – ${cenaTekst}`);
+    const opisOsnovni = `${o.kategorija} • ${o.mesto} • ${cenaTekst}. ${(o.opis || '').replace(/\s+/g, ' ')}`;
+    const opis = escapeHtmlStat(opisOsnovni.substring(0, 200));
+    const url = `${oglasnikUrl}#oglas-${id}`;
+    res.setHeader('Content-Type', 'text/html; charset=utf-8');
+    res.send(`<!DOCTYPE html><html lang="sr"><head><meta charset="UTF-8"><meta property="og:title" content="${naslov}"><meta property="og:description" content="${opis}"><meta property="og:image" content="${slika}"><meta property="og:url" content="${url}"><meta property="og:type" content="website"><meta property="og:site_name" content="Oglasnik – LokalniPlodovi"><meta property="og:locale" content="sr_RS"><meta name="twitter:card" content="summary_large_image"><meta name="twitter:title" content="${naslov}"><meta name="twitter:description" content="${opis}"><meta name="twitter:image" content="${slika}"><title>${naslov}</title></head><body><p>Preusmeravanje na oglas...</p><script>window.location.href='${url}';</script></body></html>`);
+  } catch (err) {
+    console.error('Oglas share greška:', err.message);
+    res.redirect(oglasnikUrl);
+  }
+});
 // ===== KRAJ: OGLASNIK =====
 
 // ===== BROJAČ KLIKOVA NA BANERE (Lokalni Plodovi <-> Oglasnik) =====

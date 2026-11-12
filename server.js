@@ -2067,6 +2067,96 @@ app.post('/admin/posalji-cestitku', adminAuth, async (req, res) => {
 });
 // ===== KRAJ: STATISTIKA POSETA + ČESTITKE =====
 
+// ============================================================================
+// ===== ADMIN: PORUKE IZ SLUŽBENOG NALOGA (kupcima, prodavcima, izabranima) =====
+// Službeni nalog = korisnik #1 (može se promeniti promenljivom PLATFORMA_ID na Railway-u).
+// ============================================================================
+const PLATFORMA_ID = parseInt(process.env.PLATFORMA_ID) || 1;
+let platformaNalogKes = null;
+
+async function platformaNalog() {
+  if (platformaNalogKes) return platformaNalogKes;
+  const r = await pool.query('SELECT id, ime FROM users WHERE id = $1 LIMIT 1', [PLATFORMA_ID]);
+  if (r.rows[0]) platformaNalogKes = r.rows[0];
+  return platformaNalogKes;
+}
+
+app.get('/admin/platforma-nalog', adminAuth, async (req, res) => {
+  try {
+    const n = await platformaNalog();
+    if (!n) return res.status(404).json({ error: 'Službeni nalog #' + PLATFORMA_ID + ' nije pronađen' });
+    res.json({ id: n.id, ime: n.ime });
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+app.post('/admin/poruka-korisnicima', adminAuth, async (req, res) => {
+  try {
+    const b = req.body || {};
+    const tekst = (b.tekst || '').toString().trim();
+    const grupa = (b.grupa || '').toString();
+    const mesto = (b.mesto || '').toString().trim();
+    const saljiMejl = b.saljiMejl !== false;
+    if (!tekst) return res.status(400).json({ error: 'Poruka ne može biti prazna' });
+    if (tekst.length > 1000) return res.status(400).json({ error: 'Poruka je predugačka (najviše 1000 karaktera)' });
+    if (!['kupci', 'prodavci', 'ids'].includes(grupa)) return res.status(400).json({ error: 'Nepoznata grupa' });
+
+    const nalog = await platformaNalog();
+    if (!nalog) return res.status(404).json({ error: 'Službeni nalog #' + PLATFORMA_ID + ' nije pronađen' });
+
+    let sql = `SELECT id, ime, email, tip FROM users WHERE id <> $1`;
+    const params = [nalog.id]; let i = 2;
+    if (grupa === 'kupci') sql += ` AND tip = 'kupac'`;
+    else if (grupa === 'prodavci') sql += ` AND (tip = 'prodavac' OR tip IS NULL)`;
+    else {
+      const ids = (Array.isArray(b.ids) ? b.ids : []).map(x => parseInt(x)).filter(x => Number.isInteger(x));
+      if (!ids.length) return res.status(400).json({ error: 'Unesite bar jedan ID korisnika' });
+      sql += ` AND id = ANY($${i++}::int[])`; params.push(ids);
+    }
+    if (mesto && grupa !== 'ids') { sql += ` AND lokacija ILIKE $${i++}`; params.push(`%${mesto}%`); }
+    sql += ` ORDER BY id ASC LIMIT 500`;
+    const primaoci = (await pool.query(sql, params)).rows;
+    if (!primaoci.length) return res.status(400).json({ error: 'Nema korisnika za ovu grupu' });
+    if (saljiMejl && primaoci.length > 250) {
+      return res.status(400).json({ error: 'Za više od 250 primalaca isključite email obaveštenje (dnevno ograničenje Brevo-a).' });
+    }
+
+    // Odmah odgovori; slanje ide u pozadini, malo po malo
+    res.json({ message: `Slanje pokrenuto: ${primaoci.length} primalaca. Rezultat u Railway Deploy Logs.`, broj: primaoci.length });
+
+    (async () => {
+      let ok = 0, greske = 0;
+      for (const p of primaoci) {
+        try {
+          await pool.query(`INSERT INTO poruke (od_user_id, ka_user_id, tekst) VALUES ($1, $2, $3)`, [nalog.id, p.id, tekst]);
+          const stranica = p.tip === 'kupac' ? '/kupac-profil.html' : '/moj-profil.html';
+          await posaljiPushNotifikaciju(p.id, `📬 Nova poruka od ${nalog.ime || 'Lokalni Plodovi'}`, tekst.substring(0, 100), stranica);
+          if (saljiMejl && p.email) {
+            await brevoPosaljiMejl(
+              p.email,
+              '📬 Imate novu poruku na LokalniPlodovi',
+              `<div style="font-family:Arial,sans-serif;max-width:500px;margin:0 auto;padding:20px;">
+                <h2 style="color:#2e7d32;">🌿 LokalniPlodovi</h2>
+                <p>Pozdrav <strong>${escapeHtmlStat(p.ime || '')}</strong>,</p>
+                <p>Dobili ste novu poruku od <strong>${escapeHtmlStat(nalog.ime || 'Lokalni Plodovi')}</strong>:</p>
+                <div style="background:#f5f5f5;padding:15px;border-radius:8px;">${escapeHtmlStat(tekst).replace(/\n/g, '<br>')}</div>
+                <a href="https://lokalniplodovi.rs${stranica}" style="display:inline-block;background:#2e7d32;color:white;padding:12px 24px;border-radius:8px;text-decoration:none;margin-top:10px;">Otvori poruke</a>
+                <p style="color:#999;font-size:12px;margin-top:30px;">LokalniPlodovi • lokalniplodovi.rs</p>
+              </div>`
+            );
+          }
+          ok++;
+        } catch (e) { greske++; console.error('Poruka korisniku #' + p.id + ' greška:', e.message); }
+        await new Promise(r => setTimeout(r, 300));
+      }
+      console.log(`📨 Poruke iz službenog naloga završene: uspešno ${ok}, neuspešno ${greske}`);
+    })();
+  } catch (err) {
+    console.error('Poruka korisnicima greška:', err.message);
+    if (!res.headersSent) res.status(500).json({ error: err.message });
+  }
+});
+// ===== KRAJ: PORUKE IZ SLUŽBENOG NALOGA =====
+
 const port = process.env.PORT || 3000;
 app.listen(port, () => {
   console.log(`Server startovan na portu ${port}`);

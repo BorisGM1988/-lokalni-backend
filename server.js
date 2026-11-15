@@ -431,6 +431,7 @@ function kljucNise(naziv) {
   if (t.startsWith('jaj')) return 'jaja';
   if (t.startsWith('bilj') || t.startsWith('zdrav')) return 'zdravlje';
   if (t.startsWith('domac')) return 'domaca-radinost';
+  if (t.startsWith('oras')) return 'orasasti';
   return null;
 }
 
@@ -886,7 +887,7 @@ app.post('/dodaj-proizvod', async (req, res) => {
 app.post('/uvoz-proizvoda', async (req, res) => {
   const token = req.headers.authorization?.split(' ')[1];
   if (!token) return res.status(401).json({ error: 'Niste ulogovani' });
-  const VALIDNE_NISE = ['Voće', 'Povrće', 'Mlečni proizvodi', 'Meso', 'Med', 'Jaja', 'Bilje i Zdravlje', 'Domaća radinost'];
+ const VALIDNE_NISE = ['Voće', 'Povrće', 'Mlečni proizvodi', 'Meso', 'Med', 'Jaja', 'Bilje i Zdravlje', 'Domaća radinost', 'Orašasti plodovi'];
   try {
     const decoded = jwt.verify(token, JWT_SECRET);
     const { proizvodi, glavnaNisa } = req.body;

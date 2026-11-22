@@ -2158,6 +2158,127 @@ app.post('/admin/poruka-korisnicima', adminAuth, async (req, res) => {
 });
 // ===== KRAJ: PORUKE IZ SLUŽBENOG NALOGA =====
 
+// ===== REKLAMNE PARCELE (kvadrati na početnoj; upravlja se iz admin panela) =====
+const REKLAME_PARCELA = 4;
+
+(async () => {
+  try {
+    await pool.query(`CREATE TABLE IF NOT EXISTS reklame (
+      parcela INTEGER PRIMARY KEY,
+      oglasivac TEXT NOT NULL,
+      slika TEXT NOT NULL,
+      link TEXT NOT NULL,
+      vazi_do DATE,
+      updated_at TIMESTAMPTZ DEFAULT NOW()
+    )`);
+    await pool.query(`CREATE TABLE IF NOT EXISTS reklame_klikovi (
+      id SERIAL PRIMARY KEY,
+      parcela INTEGER NOT NULL,
+      oglasivac TEXT,
+      visitor_id TEXT,
+      created_at TIMESTAMPTZ DEFAULT NOW()
+    )`);
+    await pool.query(`CREATE INDEX IF NOT EXISTS reklame_klikovi_idx ON reklame_klikovi (parcela, created_at)`);
+  } catch (err) { console.error('Greška pri pravljenju tabela za reklame:', err.message); }
+})();
+
+// Javno: popunjene parcele čiji rok nije istekao
+app.get('/reklame', async (req, res) => {
+  try {
+    const r = await pool.query(
+      `SELECT parcela, oglasivac, slika, link FROM reklame
+       WHERE parcela BETWEEN 1 AND $1 AND (vazi_do IS NULL OR vazi_do >= CURRENT_DATE)
+       ORDER BY parcela ASC`, [REKLAME_PARCELA]);
+    res.setHeader('Cache-Control', 'public, max-age=30');
+    res.json({ ukupno: REKLAME_PARCELA, reklame: r.rows });
+  } catch (err) {
+    console.error('Reklame greška:', err.message);
+    res.status(500).json({ error: 'Greška na serveru' });
+  }
+});
+
+// Javno: brojač klikova (ne broje se botovi; isti uređaj ne duplira klik u 10 s)
+app.post('/reklama-klik', async (req, res) => {
+  try {
+    const { parcela, visitor_id } = req.body || {};
+    const p = parseInt(parcela);
+    if (!(p >= 1 && p <= REKLAME_PARCELA)) return res.status(400).json({ error: 'Nepoznata parcela' });
+    if (BOT_REGEX.test(req.headers['user-agent'] || '')) return res.json({ ok: true, brojano: false });
+    const vid = (typeof visitor_id === 'string' && visitor_id.length >= 8 && visitor_id.length <= 64) ? visitor_id : null;
+    const r = await pool.query(
+      `INSERT INTO reklame_klikovi (parcela, oglasivac, visitor_id)
+       SELECT k.parcela, k.oglasivac, $2::text FROM reklame k
+       WHERE k.parcela = $1::int AND (k.vazi_do IS NULL OR k.vazi_do >= CURRENT_DATE)
+         AND NOT EXISTS (SELECT 1 FROM reklame_klikovi x WHERE x.parcela = $1::int AND x.visitor_id = $2::text AND x.created_at > NOW() - INTERVAL '10 seconds')`,
+      [p, vid]
+    );
+    res.json({ ok: true, brojano: r.rowCount > 0 });
+  } catch (err) { res.status(500).json({ error: 'Greška na serveru' }); }
+});
+
+// Admin: sve parcele (i prazne) sa brojem klikova
+app.get('/admin/reklame', adminAuth, async (req, res) => {
+  try {
+    const r = await pool.query(
+      `SELECT parcela, oglasivac, slika, link, to_char(vazi_do, 'YYYY-MM-DD') AS "vaziDo",
+              (vazi_do IS NOT NULL AND vazi_do < CURRENT_DATE) AS istekla
+       FROM reklame`);
+    const k = await pool.query(
+      `SELECT parcela, oglasivac, COUNT(*)::int AS ukupno,
+              COUNT(*) FILTER (WHERE created_at > NOW() - INTERVAL '30 days')::int AS zadnjih30
+       FROM reklame_klikovi GROUP BY parcela, oglasivac`);
+    const parcele = [];
+    for (let i = 1; i <= REKLAME_PARCELA; i++) {
+      const red = r.rows.find(x => x.parcela === i);
+      if (!red) { parcele.push({ parcela: i, oglasivac: null }); continue; }
+      const kl = k.rows.find(x => x.parcela === i && x.oglasivac === red.oglasivac);
+      parcele.push({ ...red, klikova30: kl ? kl.zadnjih30 : 0, klikovaUkupno: kl ? kl.ukupno : 0 });
+    }
+    res.json({ parcele });
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+// Admin: popuni ili izmeni parcelu
+app.put('/admin/reklama/:parcela', adminAuth, async (req, res) => {
+  try {
+    const parcela = parseInt(req.params.parcela);
+    if (!(parcela >= 1 && parcela <= REKLAME_PARCELA)) return res.status(400).json({ error: 'Nepoznata parcela' });
+    const b = req.body || {};
+    const oglasivac = (b.oglasivac || '').toString().trim();
+    const link = (b.link || '').toString().trim();
+    const vaziDo = (b.vaziDo || '').toString().trim();
+    if (oglasivac.length < 2 || oglasivac.length > 80) return res.status(400).json({ error: 'Ime oglašivača mora imati 2-80 karaktera' });
+    if (!/^https:\/\/[^\s"'<>]+$/i.test(link) || link.length > 500) return res.status(400).json({ error: 'Link mora početi sa https://' });
+    if (vaziDo && !/^\d{4}-\d{2}-\d{2}$/.test(vaziDo)) return res.status(400).json({ error: 'Datum nije ispravan' });
+    let slika = (b.slika || '').toString().trim();
+    if (b.slikaBase64) {
+      if (!/^data:image\/(jpeg|png|webp);base64,/.test(b.slikaBase64)) return res.status(400).json({ error: 'Slika mora biti JPG, PNG ili WebP' });
+      slika = await uploadSlika(b.slikaBase64);
+    }
+    if (!slika.startsWith('https://res.cloudinary.com/')) return res.status(400).json({ error: 'Slika nije uspešno otpremljena, pokušajte ponovo' });
+    await pool.query(
+      `INSERT INTO reklame (parcela, oglasivac, slika, link, vazi_do) VALUES ($1, $2, $3, $4, $5::date)
+       ON CONFLICT (parcela) DO UPDATE SET oglasivac = EXCLUDED.oglasivac, slika = EXCLUDED.slika,
+         link = EXCLUDED.link, vazi_do = EXCLUDED.vazi_do, updated_at = NOW()`,
+      [parcela, oglasivac, slika, link, vaziDo || null]
+    );
+    res.json({ message: `Parcela ${parcela} je sačuvana` });
+  } catch (err) {
+    if (err.code === '22008' || err.code === '22007') return res.status(400).json({ error: 'Datum nije ispravan' });
+    console.error('Reklama greška:', err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Admin: isprazni parcelu
+app.delete('/admin/reklama/:parcela', adminAuth, async (req, res) => {
+  try {
+    await pool.query('DELETE FROM reklame WHERE parcela = $1', [parseInt(req.params.parcela) || 0]);
+    res.json({ message: 'Parcela je ispražnjena' });
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+// ===== KRAJ: REKLAMNE PARCELE =====
+
 const port = process.env.PORT || 3000;
 app.listen(port, () => {
   console.log(`Server startovan na portu ${port}`);

@@ -2171,6 +2171,7 @@ const REKLAME_PARCELA = 4;
       vazi_do DATE,
       updated_at TIMESTAMPTZ DEFAULT NOW()
     )`);
+    await pool.query(`ALTER TABLE reklame ADD COLUMN IF NOT EXISTS opis TEXT`);
     await pool.query(`CREATE TABLE IF NOT EXISTS reklame_klikovi (
       id SERIAL PRIMARY KEY,
       parcela INTEGER NOT NULL,
@@ -2186,7 +2187,7 @@ const REKLAME_PARCELA = 4;
 app.get('/reklame', async (req, res) => {
   try {
     const r = await pool.query(
-      `SELECT parcela, oglasivac, slika, link FROM reklame
+      `SELECT parcela, oglasivac, slika, link, opis FROM reklame
        WHERE parcela BETWEEN 1 AND $1 AND (vazi_do IS NULL OR vazi_do >= CURRENT_DATE)
        ORDER BY parcela ASC`, [REKLAME_PARCELA]);
     res.setHeader('Cache-Control', 'public, max-age=30');
@@ -2220,7 +2221,7 @@ app.post('/reklama-klik', async (req, res) => {
 app.get('/admin/reklame', adminAuth, async (req, res) => {
   try {
     const r = await pool.query(
-      `SELECT parcela, oglasivac, slika, link, to_char(vazi_do, 'YYYY-MM-DD') AS "vaziDo",
+      `SELECT parcela, oglasivac, slika, link, opis, to_char(vazi_do, 'YYYY-MM-DD') AS "vaziDo",
               (vazi_do IS NOT NULL AND vazi_do < CURRENT_DATE) AS istekla
        FROM reklame`);
     const k = await pool.query(
@@ -2247,6 +2248,8 @@ app.put('/admin/reklama/:parcela', adminAuth, async (req, res) => {
     const oglasivac = (b.oglasivac || '').toString().trim();
     const link = (b.link || '').toString().trim();
     const vaziDo = (b.vaziDo || '').toString().trim();
+    const opis = (b.opis || '').toString().trim();
+    if (opis.length > 400) return res.status(400).json({ error: 'Opis može imati najviše 400 karaktera' });
     if (oglasivac.length < 2 || oglasivac.length > 80) return res.status(400).json({ error: 'Ime oglašivača mora imati 2-80 karaktera' });
     if (!/^https:\/\/[^\s"'<>]+$/i.test(link) || link.length > 500) return res.status(400).json({ error: 'Link mora početi sa https://' });
     if (vaziDo && !/^\d{4}-\d{2}-\d{2}$/.test(vaziDo)) return res.status(400).json({ error: 'Datum nije ispravan' });
@@ -2257,10 +2260,10 @@ app.put('/admin/reklama/:parcela', adminAuth, async (req, res) => {
     }
     if (!slika.startsWith('https://res.cloudinary.com/')) return res.status(400).json({ error: 'Slika nije uspešno otpremljena, pokušajte ponovo' });
     await pool.query(
-      `INSERT INTO reklame (parcela, oglasivac, slika, link, vazi_do) VALUES ($1, $2, $3, $4, $5::date)
+      `INSERT INTO reklame (parcela, oglasivac, slika, link, vazi_do, opis) VALUES ($1, $2, $3, $4, $5::date, $6)
        ON CONFLICT (parcela) DO UPDATE SET oglasivac = EXCLUDED.oglasivac, slika = EXCLUDED.slika,
-         link = EXCLUDED.link, vazi_do = EXCLUDED.vazi_do, updated_at = NOW()`,
-      [parcela, oglasivac, slika, link, vaziDo || null]
+         link = EXCLUDED.link, vazi_do = EXCLUDED.vazi_do, opis = EXCLUDED.opis, updated_at = NOW()`,
+      [parcela, oglasivac, slika, link, vaziDo || null, opis || null]
     );
     res.json({ message: `Parcela ${parcela} je sačuvana` });
   } catch (err) {

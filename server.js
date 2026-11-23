@@ -2159,7 +2159,8 @@ app.post('/admin/poruka-korisnicima', adminAuth, async (req, res) => {
 // ===== KRAJ: PORUKE IZ SLUŽBENOG NALOGA =====
 
 // ===== REKLAMNE PARCELE (kvadrati na početnoj; upravlja se iz admin panela) =====
-const REKLAME_PARCELA = 4;
+const REKLAME_PARCELA = 7;   // 1-4: kvadrati na početnoj, 5-7: vrh početne stranice (umesto fotografija)
+const REKLAME_KVADRATA = 4;
 
 (async () => {
   try {
@@ -2191,7 +2192,7 @@ app.get('/reklame', async (req, res) => {
        WHERE parcela BETWEEN 1 AND $1 AND (vazi_do IS NULL OR vazi_do >= CURRENT_DATE)
        ORDER BY parcela ASC`, [REKLAME_PARCELA]);
     res.setHeader('Cache-Control', 'public, max-age=30');
-    res.json({ ukupno: REKLAME_PARCELA, reklame: r.rows });
+    res.json({ ukupno: REKLAME_KVADRATA, reklame: r.rows });
   } catch (err) {
     console.error('Reklame greška:', err.message);
     res.status(500).json({ error: 'Greška na serveru' });

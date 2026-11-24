@@ -1213,7 +1213,7 @@ app.put('/admin/proizvod/:id', adminAuth, async (req, res) => {
 });
 
 app.put('/admin/korisnik/:id', adminAuth, async (req, res) => {
-  const { ime, telefon, lokacija, slika, cover_slika, email } = req.body;
+  const { ime, telefon, lokacija, slika, cover_slika, email, nise } = req.body;
   try {
     const check = await pool.query('SELECT id FROM users WHERE id = $1', [req.params.id]);
     if (!check.rows[0]) return res.status(404).json({ error: 'Korisnik nije pronađen' });
@@ -1227,6 +1227,15 @@ app.put('/admin/korisnik/:id', adminAuth, async (req, res) => {
       if (emailZauzet.rows[0]) return res.status(400).json({ error: 'Taj email već koristi drugi korisnik' });
     }
 
+    // Niše prodavca (cela lista se menja odjednom): niz tekstova, npr. ['Voće', 'Domaća radinost']
+    let niseJson = null;
+    if (nise !== undefined) {
+      if (!Array.isArray(nise) || nise.length > 12 || nise.some(n => typeof n !== 'string' || !n.trim() || n.length > 60)) {
+        return res.status(400).json({ error: 'Niše moraju biti lista tekstova (najviše 12)' });
+      }
+      niseJson = JSON.stringify(nise.map(n => n.trim()));
+    }
+
     await pool.query(
       `UPDATE users SET
          ime = COALESCE($1, ime),
@@ -1234,9 +1243,10 @@ app.put('/admin/korisnik/:id', adminAuth, async (req, res) => {
          lokacija = COALESCE($3, lokacija),
          slika = COALESCE($4, slika),
          cover_slika = COALESCE($5, cover_slika),
-         email = COALESCE($6, email)
+         email = COALESCE($6, email),
+         nise = COALESCE($8, nise)
        WHERE id = $7`,
-      [ime ?? null, telefon ?? null, lokacija ?? null, slika ?? null, cover_slika ?? null, email !== undefined ? String(email).trim() : null, req.params.id]
+      [ime ?? null, telefon ?? null, lokacija ?? null, slika ?? null, cover_slika ?? null, email !== undefined ? String(email).trim() : null, req.params.id, niseJson]
     );
     res.json({ message: 'Korisnik uspešno izmenjen!' });
   } catch (err) { res.status(500).json({ error: err.message }); }
